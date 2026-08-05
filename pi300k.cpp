@@ -137,10 +137,10 @@ int main() {
     std::cout << "Errore stimato: 10^{-" << err_exp << "}" << std::endl;
 
     // Salvataggio su file
-    std::ofstream fout("pi.txt");
+    std::ofstream fout("pi300k.txt");
     fout << pi_str;
     fout.close();
-    std::cout << "Cifre complete salvate in pi.txt" << std::endl;
+    std::cout << "Cifre complete salvate in pi300k.txt" << std::endl;
 
     return 0;
 }

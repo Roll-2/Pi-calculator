@@ -1,4 +1,4 @@
-# Chudnovsky π Calculator — 300,014 digits (`3m14`)
+# Chudnovsky π Calculator (`pi300k` · `pi100m`)
 
 > 🌐 **Language / Lingua:** [🇬🇧 English](#english) · [🇮🇹 Italiano](#italiano)
 
@@ -6,10 +6,21 @@
 
 # English
 
-A multi-threaded C++17 program that computes **π to 300,014 decimal places**
-using the **Chudnovsky series** with **binary splitting**, evaluated with
-arbitrary-precision arithmetic from the **MPFR** library (wrapped by
-**Boost.Multiprecision**).
+Two multi-threaded C++17 programs that compute **π** using the **Chudnovsky
+series** with **binary splitting**, evaluated with arbitrary-precision
+arithmetic from **GMP/MPFR** (wrapped by **Boost.Multiprecision**):
+
+| Program | Digits | Result file |
+|---|---|---|
+| `pi300k.cpp` | 300,014 (standard) | `pi300k.txt` |
+| `pi100m.cpp` | up to 100,000,000+ (maximum) | `pi100m.txt` |
+
+The names share a prefix so the files stay aligned in a terminal listing;
+`pi100m.txt` is git-ignored because it is ~100 MB.
+
+---
+
+## `pi300k.cpp` — the standard version
 
 | Property | Value |
 |---|---|
@@ -19,33 +30,24 @@ arbitrary-precision arithmetic from the **MPFR** library (wrapped by
 | Series terms | 21,157 (~14.18 digits per term) |
 | Working precision | ≈ 997,578 bits (~300,300 decimal digits) |
 | Threads | 4 (contiguous chunks, sequential merge) |
-| Output | `pi.txt` |
+| Output | `pi300k.txt` |
 | Measured runtime | ≈ 4.9 s (Apple Silicon, clang 21, `-O2`) |
 
----
-
-## What it does
+### What it does
 
 1. Computes π with the Chudnovsky formula using binary splitting over the
    term interval `[1, N)`.
 2. Splits the interval into **4 contiguous chunks** computed in parallel on
    separate threads, then merges the partial results in order.
 3. Formats the result to a string with `mpfr_sprintf` and writes it to
-   `pi.txt` (`"3."` followed by 300,014 decimal digits, no trailing newline).
+   `pi300k.txt` (`"3."` followed by 300,014 decimal digits, no trailing
+   newline).
 4. **Verifies the first 1,000 decimal digits** against a hard-coded known
    prefix and prints `Prime 1000 cifre: OK` on success.
 
-## The algorithm
-
-### Chudnovsky series
+### The algorithm
 
 The classic Ramanujan-derived series used for record-breaking π computations:
-
-```
-1/π = 12 · Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k+3/2))
-```
-
-The code uses the equivalent form
 
 ```
 π = 426880·√10005 / S ,   S = Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k))
@@ -54,8 +56,6 @@ The code uses the equivalent form
 Each term adds approximately `log10(640320³) ≈ 14.181647462725477` decimal
 digits, so about 21,155 terms suffice for 300,014 digits (the code uses
 `N = 21,157`).
-
-### Binary splitting
 
 Instead of summing the series term by term, the program recursively combines
 blocks of terms. For a half-open interval `[a, b)` it builds a triple
@@ -71,25 +71,16 @@ blocks of terms. For a half-open interval `[a, b)` it builds a triple
   - `R = R_left · Q_right + P_left · R_right`
 
 The recursion depth is only `log2(N) ≈ 15`, and the total work is
-`O(N · M(n))` instead of `O(N² · M(n))` for naive summation.
+`O(N · M(n))` instead of `O(N² · M(n))` for naive summation. Finally, the
+total sum is `S = A + R/Q` and `π = 426880·√10005 / S` (`A = 13591409`).
 
-Finally, the total sum is `S = A + R/Q` and `π = 426880·√10005 / S`
-(`A = 13591409`).
-
-### Parallelism
-
-The interval `[1, N)` is divided into 4 contiguous chunks of approximately
-equal size. Each thread independently runs `bs()` on its chunk, producing one
-`Triple`; the 4 triples are then merged **in order** with the same merge rule,
-so the result is exactly the full binary splitting of `[1, N)`.
-
-## Precision & accuracy
+### Precision & accuracy
 
 | Quantity | Value | Notes |
 |---|---|---|
 | Terms used | `N = 21,157` | `⌊300014 / 14.181647462725477⌋ + 2` |
 | Series truncation error | ≈ 10⁻³⁰⁰⁰⁴¹ | `14.181647462725477 · N`, printed as `Errore stimato` |
-| Working precision | ≈ 997,578 bits | `TARGET_DIGITS·log2(10) + 1000` ≈ 300,300 digit-equivalents |
+| Working precision | ≈ 997,578 bits | `TARGET_DIGITS·log2(10) + 1000` |
 | Guard digits | ≈ 300 | extra bits beyond what the 300,014 output digits need |
 | Built-in check | first 1,000 decimal digits | compared against a hard-coded known prefix — **passes** |
 
@@ -97,17 +88,10 @@ so the result is exactly the full binary splitting of `[1, N)`.
   orders of magnitude below the last printed digit.
 - The **rounding error** is kept far below the last digit by the ~1,000 extra
   guard bits of MPFR precision; `mpfr_sprintf` performs correct rounding.
-- Note: intermediate `P, Q, R` values are MPFR floating-point numbers (not
-  exact rationals), so each operation rounds at full precision — with the
-  guard margin this is negligible at this scale.
-- **Reproducibility**: re-running the program regenerates `pi.txt` byte-for-byte
-  identical to the committed file.
+- **Reproducibility**: re-running the program regenerates `pi300k.txt`
+  byte-for-byte identical to the committed file.
 
-> The `Errore stimato` line is the bound on the *series truncation*; the true
-> error of the printed digits also includes MPFR rounding, which is bounded
-> by the guard bits and is many orders below the last digit.
-
-## Build & run
+### Build & run
 
 Requirements: a C++17 compiler, [Boost.Multiprecision](https://www.boost.org/),
 [MPFR](https://www.mpfr.org/) and GMP.
@@ -120,17 +104,13 @@ brew install boost mpfr gmp
 sudo apt install libboost-dev libmpfr-dev libgmp-dev
 
 # Build (macOS with Homebrew)
-g++ -O2 -std=c++17 3m14.cpp -o 3m14_chudnovsky \
+g++ -O2 -std=c++17 pi300k.cpp -o pi300k \
     -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
 
 # Build (Linux)
-g++ -O2 -std=c++17 3m14.cpp -o 3m14_chudnovsky -lmpfr -lgmp
-```
+g++ -O2 -std=c++17 pi300k.cpp -o pi300k -lmpfr -lgmp
 
-Run:
-
-```bash
-./3m14_chudnovsky
+./pi300k
 ```
 
 Sample output (console messages are in Italian):
@@ -138,40 +118,135 @@ Sample output (console messages are in Italian):
 ```
 Termini: 21157
 Prime 1000 cifre: OK
-Tempo calcolo: 4.92788 s
+Tempo calcolo: 4.95486 s
 Errore stimato: 10^{-300041}
-Cifre complete salvate in pi.txt
+Cifre complete salvate in pi300k.txt
 ```
 
-## Configuration
+### Configuration
 
-Both knobs are constants at the top of `main()` in `3m14.cpp`:
+Both knobs are constants at the top of `main()` in `pi300k.cpp`:
 
-- `TARGET_DIGITS = 300014` — number of decimal places written to `pi.txt`.
-  **Scaling up**: the series truncation error is `10^(-14.18·N)`, so
-  `N = digits / 14.1816 + 2` terms are used automatically; the +1000 guard
-  bits are enough for any value of `TARGET_DIGITS` (beyond ~62M digits the
-  base-case 64-bit arithmetic in `bs()` would overflow — see Notes).
+- `TARGET_DIGITS = 300014` — number of decimal places written to
+  `pi300k.txt`. Beyond ~62M digits the base-case 64-bit arithmetic in `bs()`
+  would overflow — see Notes.
 - `NUM_THREADS = 4` — number of threads; `[1, N)` is split into this many
   contiguous chunks.
+
+> In `pi100m.cpp` digits and threads are command-line arguments instead of
+> constants — see the section below.
+
+---
+
+## `pi100m.cpp` — the maximum version
+
+`pi100m.cpp` is the most powerful of the two implementations. It applies the
+techniques used by world-record π codes, following the architecture of
+`gmp-chudnovsky.c`, the GMP team's reference implementation by Hanhong Xue:
+
+| Record technique | Applied here |
+|---|---|
+| 1. Binary splitting | full binary tree of terms |
+| 2. Exact integer math | the whole `P, Q, T` tree runs on **GMP integers** (`mpz_class`); MPFR floating point is used **once**, for the final single division |
+| 3. FFT multiplication | GMP's Schönhage–Strassen is selected automatically above its FFT threshold; no tuning needed |
+| 4. Dynamic-precision Newton sqrt | `sqrt(10005)` via Newton iterations that double the precision each step (a final full-precision step is included, otherwise the last digits are wrong) |
+| 5. Fast decimal output | `round(pi·10^D)` as an exact integer, converted with GMP's divide-and-conquer `mpz_get_str`; math and I/O timings are printed separately |
+
+### Usage
+
+```bash
+# Build (macOS with Homebrew)
+g++ -O2 -std=c++17 pi100m.cpp -o pi100m \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
+
+# Build (Linux)
+g++ -O2 -std=c++17 pi100m.cpp -o pi100m -lmpfr -lgmp
+
+./pi100m              # 1,000,000 digits, all cores
+./pi100m 100000000 10 # 100,000,000 digits, 10 of 12 cores (~80% CPU)
+# optional: nice -n 10 keeps the machine responsive during long runs
+```
+
+### Measured performance
+
+Apple M4 Pro (12 cores, 24 GB RAM, clang 21, `-O2`); both programs write the
+same digits (300k verified byte-for-byte, 1M cross-checked against an
+independent π-digit service with 80/80 matches at positions 100k, 500k and
+999.9k):
+
+| Digits | `pi300k.cpp` (4 threads) | `pi100m.cpp` (10 threads) |
+|---|---|---|
+| 300,014 | ≈ 4.9 s | ≈ 0.25 s |
+| 1,000,000 | — | ≈ 1.1 s |
+| 100,000,000 | — | ≈ 322 s (~5.4 min), ≈ 4.4 GB RAM |
+
+### The maximum result (`pi100m.txt`)
+
+`pi100m.txt` contains **100,000,000 decimal digits** (`"3."` + 100,000,000
+digits, ≈ 100 MB, git-ignored), computed at ~80% CPU (10 of 12 cores) and
+**fully verified**:
+
+- first 300,014 digits **byte-identical to `pi300k.txt`**;
+- first 1,000 digits match the hard-coded known prefix;
+- digit frequency uniform within 0.01% over all 100M digits;
+- series truncation error `10^(-10⁸)`, far below the last digit;
+- **last digits verified**: a second independent computation with 5× the
+  guard margin (+5000 bits of working precision) produced a **byte-identical
+  file** — the result does not depend on the rounding margin, so all
+  100,000,000 digits (including the last ones) are correctly rounded.
+
+### Viewing `pi100m.txt`
+
+The file is a **single line of ~100 MB** — that is normal and why
+TextEdit/kitty struggle with it (they try to render one huge line). Use the
+terminal instead:
+
+```bash
+head -c 100 pi100m.txt          # first 100 digits
+tail -c 100 pi100m.txt          # last 100 digits
+fold -w 100 pi100m.txt | less   # paginate wrapped in lines of 100 digits
+split -b 1M pi100m.txt pi_part_ # split into 1 MB chunks
+```
+
+### Theoretical limits
+
+1. **Series truncation** — the Chudnovsky error after N terms is
+   `10^(-14.1816·N)`, so more terms can always be added: no ceiling here.
+2. **64-bit base case** — `pi300k.cpp` overflows at `a ≳ 4.4·10⁶` terms,
+   i.e. ≈ 62 million digits. `pi100m.cpp` removes this ceiling with GMP
+   integers.
+3. **Memory** — peak footprint grows roughly linearly with the digits:
+   ≈ 0.5 GB at 10M, ≈ 4.4 GB at 100M. 314M digits would need ≈ 15 GB and
+   ≈ 30–45 min; 1 billion digits would need ≈ 45 GB, beyond the 24 GB
+   available.
+4. **Time** — measured scaling ≈ n^1.25 (1M → 10M → 31.4M → 100M).
+
+### The world record
+
+The current record is **314,000,000,000,000 digits (314 trillion)**, computed
+by **StorageReview** (November 2025) with the *same* Chudnovsky algorithm via
+y-cruncher — but on a dedicated 2U server with 384 cores, 1.5 TB of RAM,
+~2.4 PB of NVMe storage, running for ~110 days.
+
+---
 
 ## Project layout
 
 ```
-3m14.cpp          the implementation (algorithm, threading, I/O)
-pi.txt            computed output: "3." + 300,014 decimal digits (300,016 bytes)
-.gitignore        ignores build artifacts and the binary 3m14_chudnovsky
+pi100m.cpp        the maximum version: exact mpz tree, Newton sqrt, fast conversion
+pi100m.txt        its output: "3." + 100,000,000 digits (git-ignored, ~100 MB)
+pi300k.cpp        the standard version (mpfr tree, 300,014 digits)
+pi300k.txt        its output: "3." + 300,014 decimal digits (300,016 bytes)
+.gitignore        ignores build artifacts, binaries and the huge pi100m.txt
 ```
 
 ## Notes & observations
 
-- **64-bit base case**: the product `(6a−5)(2a−1)(6a−1)` uses `unsigned long
-  long`. It stays within 64 bits up to `a ≈ 4.4·10⁶` terms (≈ 62M digits),
-  after which it would overflow.
-- **File format**: `pi.txt` has no trailing newline; the first line starts
+- **File format**: neither output file has a trailing newline; both start
   with `3.1415926535...`.
-- **Name**: `3m14` most likely reads as *"3M14"* — an ambition of 3,000,014
-  digits — or as a nod to π ≈ 3.14; the committed target is 300,014 digits.
+- **Naming**: files are named by their size (`pi300k` = 300,014 digits,
+  `pi100m` = 100,000,000 digits) so that related files share a prefix and
+  stay aligned in a terminal listing.
 
 ## License
 
@@ -181,10 +256,21 @@ No license file is present in the repository.
 
 # Italiano
 
-Programma C++17 multi-thread che calcola **π fino a 300.014 cifre decimali**
-usando la **serie di Chudnovsky** con **binary splitting**, valutata con
-aritmetica a precisione arbitraria della libreria **MPFR** (incapsulata da
-**Boost.Multiprecision**).
+Due programmi C++17 multi-thread che calcolano **π** usando la **serie di
+Chudnovsky** con **binary splitting**, valutata con aritmetica a precisione
+arbitraria di **GMP/MPFR** (incapsulata da **Boost.Multiprecision**):
+
+| Programma | Cifre | File risultato |
+|---|---|---|
+| `pi300k.cpp` | 300.014 (standard) | `pi300k.txt` |
+| `pi100m.cpp` | fino a 100.000.000+ (massima) | `pi100m.txt` |
+
+I nomi condividono il prefisso così i file restano allineati nel terminale;
+`pi100m.txt` è git-ignorato perché pesa ~100 MB.
+
+---
+
+## `pi300k.cpp` — la versione standard
 
 | Proprietà | Valore |
 |---|---|
@@ -194,33 +280,24 @@ aritmetica a precisione arbitraria della libreria **MPFR** (incapsulata da
 | Termini della serie | 21.157 (~14,18 cifre per termine) |
 | Precisione di lavoro | ≈ 997.578 bit (~300.300 cifre decimali) |
 | Thread | 4 (chunk contigui, merge sequenziale) |
-| Output | `pi.txt` |
+| Output | `pi300k.txt` |
 | Tempo misurato | ≈ 4,9 s (Apple Silicon, clang 21, `-O2`) |
 
----
-
-## Cosa fa
+### Cosa fa
 
 1. Calcola π con la formula di Chudnovsky usando il binary splitting
    sull'intervallo di termini `[1, N)`.
 2. Divide l'intervallo in **4 chunk contigui** calcolati in parallelo su
    thread separati, poi unisce i risultati parziali in ordine.
 3. Formatta il risultato in stringa con `mpfr_sprintf` e lo scrive in
-   `pi.txt` (`"3."` seguito da 300.014 cifre decimali, senza newline finale).
+   `pi300k.txt` (`"3."` seguito da 300.014 cifre decimali, senza newline
+   finale).
 4. **Verifica le prime 1.000 cifre decimali** confrontandole con un prefisso
    noto hard-coded e stampa `Prime 1000 cifre: OK` in caso di successo.
 
-## L'algoritmo
-
-### Serie di Chudnovsky
+### L'algoritmo
 
 La classica serie derivata da Ramanujan usata per i record di calcolo di π:
-
-```
-1/π = 12 · Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k+3/2))
-```
-
-Il codice usa la forma equivalente
 
 ```
 π = 426880·√10005 / S ,   S = Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k))
@@ -229,8 +306,6 @@ Il codice usa la forma equivalente
 Ogni termine aggiunge circa `log10(640320³) ≈ 14,181647462725477` cifre
 decimali, quindi bastano circa 21.155 termini per 300.014 cifre (il codice usa
 `N = 21.157`).
-
-### Binary splitting
 
 Invece di sommare la serie termine per termine, il programma combina
 ricorsivamente blocchi di termini. Per un intervallo semi-aperto `[a, b)`
@@ -246,26 +321,16 @@ costruisce una tripla `(P, Q, R)`:
   - `R = R_sx · Q_dx + P_sx · R_dx`
 
 La profondità della ricorsione è solo `log2(N) ≈ 15`, e il lavoro totale è
-`O(N · M(n))` invece di `O(N² · M(n))` della somma ingenua.
+`O(N · M(n))` invece di `O(N² · M(n))` della somma ingenua. Infine la somma
+totale è `S = A + R/Q` e `π = 426880·√10005 / S` (`A = 13591409`).
 
-Infine la somma totale è `S = A + R/Q` e `π = 426880·√10005 / S`
-(`A = 13591409`).
-
-### Parallelismo
-
-L'intervallo `[1, N)` viene diviso in 4 chunk contigui di dimensione
-approssimativamente uguale. Ogni thread esegue in modo indipendente `bs()` sul
-proprio chunk, producendo una `Triple`; le 4 triple vengono poi unite **in
-ordine** con la stessa regola di merge, quindi il risultato è esattamente il
-binary splitting completo di `[1, N)`.
-
-## Precisione e accuratezza
+### Precisione e accuratezza
 
 | Grandezza | Valore | Note |
 |---|---|---|
 | Termini usati | `N = 21.157` | `⌊300014 / 14,181647462725477⌋ + 2` |
 | Errore di troncamento della serie | ≈ 10⁻³⁰⁰⁰⁴¹ | `14,181647462725477 · N`, stampato come `Errore stimato` |
-| Precisione di lavoro | ≈ 997.578 bit | `TARGET_DIGITS·log2(10) + 1000` ≈ 300.300 equivalenti decimali |
+| Precisione di lavoro | ≈ 997.578 bit | `TARGET_DIGITS·log2(10) + 1000` |
 | Cifre di guardia | ≈ 300 | bit extra oltre quelli necessari alle 300.014 cifre di output |
 | Controllo integrato | prime 1.000 cifre decimali | confrontate con un prefisso noto hard-coded — **superato** |
 
@@ -274,17 +339,10 @@ binary splitting completo di `[1, N)`.
 - L'**errore di arrotondamento** è mantenuto molto al di sotto dell'ultima
   cifra dai ~1.000 bit di guardia extra della precisione MPFR;
   `mpfr_sprintf` esegue l'arrotondamento corretto.
-- Nota: i valori intermedi `P, Q, R` sono numeri in virgola mobile MPFR (non
-  razionali esatti), quindi ogni operazione arrotonda a piena precisione — con
-  il margine di guardia questo è trascurabile a questa scala.
-- **Riproducibilità**: rieseguire il programma rigenera `pi.txt` identico
+- **Riproducibilità**: rieseguire il programma rigenera `pi300k.txt` identico
   byte per byte al file committato.
 
-> La riga `Errore stimato` è il limite sul *troncamento della serie*; l'errore
-> reale delle cifre stampate include anche l'arrotondamento MPFR, limitato dai
-> bit di guardia e di molti ordini al di sotto dell'ultima cifra.
-
-## Compilazione ed esecuzione
+### Compilazione ed esecuzione
 
 Requisiti: un compilatore C++17, [Boost.Multiprecision](https://www.boost.org/),
 [MPFR](https://www.mpfr.org/) e GMP.
@@ -297,17 +355,13 @@ brew install boost mpfr gmp
 sudo apt install libboost-dev libmpfr-dev libgmp-dev
 
 # Compilazione (macOS con Homebrew)
-g++ -O2 -std=c++17 3m14.cpp -o 3m14_chudnovsky \
+g++ -O2 -std=c++17 pi300k.cpp -o pi300k \
     -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
 
 # Compilazione (Linux)
-g++ -O2 -std=c++17 3m14.cpp -o 3m14_chudnovsky -lmpfr -lgmp
-```
+g++ -O2 -std=c++17 pi300k.cpp -o pi300k -lmpfr -lgmp
 
-Esecuzione:
-
-```bash
-./3m14_chudnovsky
+./pi300k
 ```
 
 Output di esempio (i messaggi a console sono in italiano):
@@ -315,42 +369,138 @@ Output di esempio (i messaggi a console sono in italiano):
 ```
 Termini: 21157
 Prime 1000 cifre: OK
-Tempo calcolo: 4.92788 s
+Tempo calcolo: 4.95486 s
 Errore stimato: 10^{-300041}
-Cifre complete salvate in pi.txt
+Cifre complete salvate in pi300k.txt
 ```
 
-## Configurazione
+### Configurazione
 
-Entrambe le manopole sono costanti in cima a `main()` in `3m14.cpp`:
+Entrambe le manopole sono costanti in cima a `main()` in `pi300k.cpp`:
 
-- `TARGET_DIGITS = 300014` — numero di decimali scritti in `pi.txt`.
-  **Scalabilità**: l'errore di troncamento della serie è `10^(-14,18·N)`,
-  quindi `N = cifre / 14,1816 + 2` termini vengono usati automaticamente; i
-  +1000 bit di guardia bastano per qualsiasi valore di `TARGET_DIGITS`
-  (oltre ~62M di cifre l'aritmetica a 64 bit del caso base in `bs()` andrebbe
-  in overflow — vedi Note).
+- `TARGET_DIGITS = 300014` — numero di decimali scritti in `pi300k.txt`.
+  Oltre ~62M di cifre l'aritmetica a 64 bit del caso base in `bs()` andrebbe
+  in overflow — vedi Note.
 - `NUM_THREADS = 4` — numero di thread; `[1, N)` viene diviso in questo numero
   di chunk contigui.
+
+> In `pi100m.cpp` cifre e thread sono argomenti da riga di comando invece
+> che costanti — vedi la sezione sotto.
+
+---
+
+## `pi100m.cpp` — la versione massima
+
+`pi100m.cpp` è la più potente delle due implementazioni. Applica le tecniche
+usate dai codici da record per π, seguendo l'architettura di
+`gmp-chudnovsky.c`, l'implementazione di riferimento del team GMP (di Hanhong
+Xue):
+
+| Tecnica da record | Applicazione qui |
+|---|---|
+| 1. Binary splitting | albero binario completo dei termini |
+| 2. Interi esatti | l'intero albero `P, Q, T` gira su **interi GMP** (`mpz_class`); la virgola mobile MPFR è usata **una sola volta**, per la divisione finale |
+| 3. Moltiplicazione FFT | la Schönhage–Strassen di GMP viene selezionata da sola oltre la soglia FFT; nessuna configurazione |
+| 4. Radice Newton a precisione dinamica | `sqrt(10005)` con iterazioni di Newton che raddoppiano la precisione a ogni passo (serve anche un passo finale a piena precisione, altrimenti le ultime cifre sono sbagliate) |
+| 5. Output decimale veloce | `round(pi·10^D)` come intero esatto, convertito con la `mpz_get_str` divide-and-conquer di GMP; i tempi di matematica e I/O sono stampati separatamente |
+
+### Uso
+
+```bash
+# Compilazione (macOS con Homebrew)
+g++ -O2 -std=c++17 pi100m.cpp -o pi100m \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
+
+# Compilazione (Linux)
+g++ -O2 -std=c++17 pi100m.cpp -o pi100m -lmpfr -lgmp
+
+./pi100m              # 1.000.000 cifre, tutti i core
+./pi100m 100000000 10 # 100.000.000 cifre, 10 core su 12 (~80% CPU)
+# facoltativo: nice -n 10 mantiene la macchina reattiva nei run lunghi
+```
+
+### Prestazioni misurate
+
+Apple M4 Pro (12 core, 24 GB RAM, clang 21, `-O2`); i due programmi scrivono
+le stesse cifre (300k verificate byte per byte, 1M verificate contro un
+servizio indipendente di cifre di π con 80/80 match alle posizioni 100k,
+500k e 999,9k):
+
+| Cifre | `pi300k.cpp` (4 thread) | `pi100m.cpp` (10 thread) |
+|---|---|---|
+| 300.014 | ≈ 4,9 s | ≈ 0,25 s |
+| 1.000.000 | — | ≈ 1,1 s |
+| 100.000.000 | — | ≈ 322 s (~5,4 min), ≈ 4,4 GB di RAM |
+
+### Il risultato massimo (`pi100m.txt`)
+
+`pi100m.txt` contiene **100.000.000 cifre decimali** (`"3."` + 100.000.000
+cifre, ≈ 100 MB, git-ignorato), calcolato al ~80% di CPU (10 core su 12) e
+**completamente verificato**:
+
+- le prime 300.014 cifre sono **byte-identiche a `pi300k.txt`**;
+- le prime 1.000 cifre coincidono col prefisso noto hard-coded;
+- la frequenza delle cifre è uniforme entro lo 0,01% su tutti i 100M digit;
+- errore di troncamento della serie `10^(-10⁸)`, molto al di sotto
+  dell'ultima cifra;
+- **ultime cifre verificate**: un secondo calcolo indipendente con 5× il
+  margine di guardia (+5000 bit di precisione di lavoro) ha prodotto un file
+  **byte-identico** — il risultato non dipende dal margine di arrotondamento,
+  quindi tutte le 100.000.000 cifre (ultime incluse) sono arrotondate
+  correttamente.
+
+### Come visualizzare `pi100m.txt`
+
+Il file è **una singola riga di ~100 MB** — è normale, ed è per questo che
+TextEdit/kitty faticano (provano a renderizzare un'unica riga enorme). Usa il
+terminale:
+
+```bash
+head -c 100 pi100m.txt          # prime 100 cifre
+tail -c 100 pi100m.txt          # ultime 100 cifre
+fold -w 100 pi100m.txt | less   # paginazione con righe da 100 cifre
+split -b 1M pi100m.txt pi_part_ # dividi in blocchi da 1 MB
+```
+
+### Limiti teorici
+
+1. **Troncamento della serie** — l'errore di Chudnovsky dopo N termini è
+   `10^(-14,1816·N)`, quindi si possono sempre aggiungere termini: nessun
+   tetto da questo lato.
+2. **Caso base a 64 bit** — `pi300k.cpp` va in overflow per `a ≳ 4,4·10⁶`
+   termini, cioè ≈ 62 milioni di cifre. `pi100m.cpp` elimina questo tetto
+   con gli interi GMP.
+3. **Memoria** — il picco cresce all'incirca in modo lineare con le cifre:
+   ≈ 0,5 GB a 10M, ≈ 4,4 GB a 100M. 314M cifre richiederebbero ≈ 15 GB e
+   ≈ 30–45 min; 1 miliardo richiederebbe ≈ 45 GB, oltre i 24 GB disponibili.
+4. **Tempo** — scalabilità misurata ≈ n^1,25 (1M → 10M → 31,4M → 100M).
+
+### Il record mondiale
+
+Il record attuale è di **314.000.000.000.000 cifre (≈ 314 mila miliardi)**,
+calcolato da **StorageReview** (novembre 2025) con lo *stesso* algoritmo di
+Chudnovsky tramite y-cruncher — ma su un server 2U dedicato con 384 core,
+1,5 TB di RAM, ~2,4 PB di storage NVMe e ~110 giorni di calcolo.
+
+---
 
 ## Struttura del progetto
 
 ```
-3m14.cpp          l'implementazione (algoritmo, threading, I/O)
-pi.txt            output calcolato: "3." + 300.014 cifre decimali (300.016 byte)
-.gitignore        ignora gli artefatti di build e il binario 3m14_chudnovsky
+pi100m.cpp        la versione massima: albero mpz esatto, Newton, conversione veloce
+pi100m.txt        il suo output: "3." + 100.000.000 cifre (git-ignorato, ~100 MB)
+pi300k.cpp        la versione standard (albero mpfr, 300.014 cifre)
+pi300k.txt        il suo output: "3." + 300.014 cifre decimali (300.016 byte)
+.gitignore        ignora artefatti di build, binari e il grande pi100m.txt
 ```
 
 ## Note e osservazioni
 
-- **Caso base a 64 bit**: il prodotto `(6a−5)(2a−1)(6a−1)` usa `unsigned long
-  long`. Resta entro 64 bit fino a `a ≈ 4,4·10⁶` termini (≈ 62M di cifre),
-  oltre i quali andrebbe in overflow.
-- **Formato file**: `pi.txt` non ha newline finale; la prima riga inizia con
-  `3.1415926535...`.
-- **Nome**: `3m14` si legge molto probabilmente come *"3M14"* — l'ambizione di
-  3.000.014 cifre — oppure come un omaggio a π ≈ 3,14; il target committato è
-  di 300.014 cifre.
+- **Formato file**: nessuno dei due output ha newline finale; entrambi iniziano
+  con `3.1415926535...`.
+- **Nomi**: i file sono nominati in base alla dimensione (`pi300k` = 300.014
+  cifre, `pi100m` = 100.000.000 cifre) così i file correlati condividono il
+  prefisso e restano allineati nel terminale.
 
 ## Licenza
 

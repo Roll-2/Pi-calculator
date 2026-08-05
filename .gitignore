@@ -17,7 +17,8 @@
 # -------------------------------
 # Eseguibili
 # -----------------------------
-3m14_chudnovsky
+pi300k
+pi100m
 
 # -------------------------------
 # Librerie statiche e dinamiche
@@ -144,6 +145,8 @@ DerivedData/
 # -------------------------------
 # File di test e dati grandi
 # -------------------------------
+# Risultato enorme (100 milioni di cifre, ~100 MB): NON nei backup git
+pi100m.txt
 *.test
 *.dat
 *.data
