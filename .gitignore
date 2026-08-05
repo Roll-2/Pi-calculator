@@ -1,0 +1,186 @@
+# ============================================================
+# .gitignore per progetti C/C++
+# ============================================================
+
+# -------------------------------
+# File oggetto e compilazione
+# -------------------------------
+*.o
+*.obj
+*.gch
+*.pch
+*.dSYM/
+*.exe
+*.out
+*.app
+
+# -------------------------------
+# Eseguibili
+# -----------------------------
+3m14_chudnovsky
+
+# -------------------------------
+# Librerie statiche e dinamiche
+# -------------------------------
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.so.*
+*.dylib.*
+
+# -------------------------------
+# File di debug e profiling
+# -------------------------------
+*.gcda
+*.gcno
+*.gcov
+*.prof
+*.gmon
+
+# -------------------------------
+# File temporanei di editor e sistema
+# -------------------------------
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+*.log
+*.cache
+*.orig
+*.rej
+.DS_Store
+Thumbs.db
+*.suo
+*.user
+*.userosscache
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+
+# -------------------------------
+# Cartelle di build (compile)
+# -------------------------------
+build/
+Build/
+bin/
+lib/
+obj/
+out/
+Debug/
+Release/
+x64/
+x86/
+*.build/
+*.ninja
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# -------------------------------
+# IDE e ambienti di sviluppo
+# -------------------------------
+
+# Visual Studio
+.vs/
+.vscode/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.userprefs
+*.db
+
+# CLion / IntelliJ
+.idea/
+*.iml
+cmake-build-*/
+
+# Qt Creator
+*.user
+*.creator
+*.files
+*.includes
+*.config
+
+# CodeBlocks
+*.cbp
+*.depend
+*.layout
+*.workspace
+*.code-workspace
+
+# Eclipse
+.project
+.classpath
+.cproject
+.settings/
+*.cproject
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+*.xcconfig
+DerivedData/
+*.xcscheme
+
+# -------------------------------
+# Archivi e file compressi
+# -------------------------------
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+*.bz2
+
+# -------------------------------
+# File di test e dati grandi
+# -------------------------------
+*.test
+*.dat
+*.data
+*.csv
+*.json
+*.xml
+*.yaml
+*.yml
+*.db
+*.sqlite
+*.sqlite3
+
+# -------------------------------
+# Cartelle di documentazione generata
+# -------------------------------
+doc/
+docs/_build/
+html/
+latex/
+man/
+
+# -------------------------------
+# Dipendenze e librerie esterne (attualmente non vuoglio includerle)
+# -------------------------------
+# vcpkg
+vcpkg_installed/
+vcpkg-manifest-install/
+vcpkg/
+
+# Conan
+conaninfo.txt
+conanbuildinfo.*
+conanbuildinfo.cmake
+conan.lock
+conanbuild.lock
+
+# ============================================================
+# NOTA: Per forzare l'aggiunta di un file ignorato, usa:
+#   git add -f nomefile
+# ============================================================
