@@ -114,10 +114,12 @@ struct FlatShader {
     }
 };
 
-// ------------------------- clock e rate condivisi (provisionali, si tarano allo STEP 9) -------------------------
-// rate(t) = corde/secondo per il chord stream; il pendolo usa θ̇ = K_θ · rate(t).
-// Esponenziale che satura a t≈120 s: l'integrale su [0,120] è ≈ 100M cifre
-// (il file di default), quindi l'animazione "significativa" dura ~2 minuti.
+// ------------------------- clock e rate condivisi (tarati, STEP 9) -------------------------
+// rate(t) = corde/secondo per il chord stream; il pendolo usa θ̇ = K_θ · rate(t)
+// con K_θ = THETA_MAX / cifre_totali (stesso progresso, stesso clock).
+// Esponenziale che satura a t≈120 s. Verifica empirica con probe (integrazione
+// discreta a dt=1/60, clamp e cap identici al loop reale): il file da 100M
+// cifre si esaurisce a t=120,00 s — bersaglio dei ~2 minuti centrato.
 static const double RATE_A   = 184.0;   // ampiezza iniziale (rate(0)=0, crescita lenta)
 static const double RATE_K   = 0.09;    // costante esponenziale
 static const double RATE_MAX = 9.0e6;   // saturazione (raggiunta a t≈120 s)
