@@ -12,7 +12,9 @@
 //
 // Tasti:  Esc   esci
 //         0-3   palette (0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna)
-//         (altri tasti negli STEP successivi)
+//         S     screenshot PNG in pictures/ (fallback: $HOME)
+//         R     reset del clock e riavvio dall'inizio del file π
+//         F     fullscreen on/off
 //
 // Compilazione (macOS ARM, Homebrew):
 //   make            (oppure il comando equivalente qui sotto)
@@ -34,11 +36,14 @@
 #include <cstdlib>
 #include <string>
 
+#include <sys/stat.h>
+
 #include "visual/camera.h"
 #include "visual/chord.h"
 #include "visual/hud.h"
 #include "visual/pendulum.h"
 #include "visual/pi_reader.h"
+#include "visual/screenshot.h"
 
 static const int WIN_W = 1600;
 static const int WIN_H = 900;
@@ -195,6 +200,8 @@ int main(int argc, char* argv[]) {
     }
     SDL_GL_SetSwapInterval(1);  // vsync
 
+    ::mkdir("pictures", 0755);   // per gli screenshot (EEXIST è ok, ignorato)
+
     FlatShader flat;
     if (!flat.init()) {
         std::fprintf(stderr, "Inizializzazione shader fallita\n");
@@ -313,6 +320,10 @@ int main(int argc, char* argv[]) {
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 t_start = SDL_GetPerformanceCounter();
 
+    bool fullscreen = false;
+    bool screenshot_requested = false;
+    bool reset_requested = false;
+
     bool running = true;
     while (running) {
         SDL_Event ev;
@@ -326,6 +337,12 @@ int main(int argc, char* argv[]) {
                     case SDLK_1: pk = 1; break;
                     case SDLK_2: pk = 2; break;
                     case SDLK_3: pk = 3; break;
+                    case SDLK_s: screenshot_requested = true; break;
+                    case SDLK_r: reset_requested = true; break;
+                    case SDLK_f:
+                        fullscreen = !fullscreen;
+                        SDL_SetWindowFullscreen(win, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                        break;
                     default: break;
                 }
                 if (pk >= 0) {
@@ -488,6 +505,22 @@ int main(int argc, char* argv[]) {
             glUseProgram(0);
         }
         hud.prune();
+
+        // ---- reset (tasto R): clock e stream da capo ----
+        if (reset_requested) {
+            reset_requested = false;
+            t_start = SDL_GetPerformanceCounter();
+            t_prev = 0.0;
+            stream.reset();
+            pend_stream.reset();
+        }
+
+        // ---- screenshot (tasto S): cattura il back buffer PRIMA dello swap ----
+        if (screenshot_requested) {
+            screenshot_requested = false;
+            std::string path = screenshot_save("pictures/Pi-visual");
+            if (!path.empty()) std::printf("screenshot salvato: %s\n", path.c_str());
+        }
 
         SDL_GL_SwapWindow(win);
     }
