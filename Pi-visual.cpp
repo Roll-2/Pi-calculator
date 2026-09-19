@@ -32,6 +32,8 @@
 #include <string>
 
 #include "visual/camera.h"
+#include "visual/chord.h"
+#include "visual/pi_reader.h"
 
 static const int WIN_W = 1600;
 static const int WIN_H = 900;
@@ -109,7 +111,15 @@ struct FlatShader {
 };
 
 int main(int argc, char* argv[]) {
-    (void)argc; (void)argv;
+    const char* pi_path = "pi100m.txt";   // argomento --pi <file> per cambiarlo
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--pi" && i + 1 < argc) {
+            pi_path = argv[++i];
+        } else {
+            std::fprintf(stderr, "Uso: %s [--pi file_cifre]\n", argv[0]);
+            return 1;
+        }
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::fprintf(stderr, "SDL_Init fallito: %s\n", SDL_GetError());
@@ -148,6 +158,42 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+
+    // ---- chord diagram (viewport destro): lettura mmap + mesh statiche ----
+    PiReader pi_reader;
+    if (!pi_reader.open(pi_path)) {
+        std::fprintf(stderr, "Impossibile leggere il file π: %s\n", pi_path);
+        SDL_GL_DeleteContext(gl);
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
+    ChordData chord_data;
+    chord_data.accumulate(pi_reader, pi_reader.decimal_digits());
+
+    std::vector<ChordVertex> chord_sec_v, chord_chd_v;
+    chord_build_sectors(CHORD_PALETTE_TMP, chord_sec_v);
+    chord_build_static_chords(chord_data, CHORD_PALETTE_TMP, chord_chd_v);
+
+    GLuint sec_vao = 0, sec_vbo = 0, chd_vao = 0, chd_vbo = 0;
+    auto upload_mesh = [](std::vector<ChordVertex>& v, GLuint* vao, GLuint* vbo) {
+        glGenVertexArrays(1, vao);
+        glBindVertexArray(*vao);
+        glGenBuffers(1, vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+        glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(ChordVertex), v.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(ChordVertex), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(ChordVertex), (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+    };
+    upload_mesh(chord_sec_v, &sec_vao, &sec_vbo);
+    upload_mesh(chord_chd_v, &chd_vao, &chd_vbo);
+    const GLsizei chord_sec_v_count = (GLsizei)chord_sec_v.size();
+    const GLsizei chord_chd_v_count = (GLsizei)chord_chd_v.size();
+    chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
+    chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
     // ---- triangolo di prova per la camera (STEP 4: verifica visiva) ----
     GLuint tri_vao = 0, tri_vbo = 0;
@@ -226,17 +272,44 @@ int main(int argc, char* argv[]) {
             glUseProgram(0);
         }
 
-        // ---- viewport destro: ancora vuoto (chord diagram: STEP 5) ----
+        // ---- viewport destro: chord diagram statico (STEP 5) ----
         glViewport(half, 0, w - half, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        {
+            float aspect = (float)(w - half) / (float)h;
+            mat4 O;
+            mat4_ortho(O, -aspect, aspect, -1.0f, 1.0f, -1.0f, 1.0f);
+
+            glUseProgram(flat.prog);
+            glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, O);
+
+            // settori: alpha blending standard
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(sec_vao);
+            glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_sec_v_count);
+
+            // corde: blending additivo (richiesto dalla specifica)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glBindVertexArray(chd_vao);
+            glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_chd_v_count);
+
+            glBindVertexArray(0);
+            glUseProgram(0);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
 
         SDL_GL_SwapWindow(win);
     }
 
     glDeleteBuffers(1, &tri_vbo);
     glDeleteVertexArrays(1, &tri_vao);
+    glDeleteBuffers(1, &sec_vbo);
+    glDeleteVertexArrays(1, &sec_vao);
+    glDeleteBuffers(1, &chd_vbo);
+    glDeleteVertexArrays(1, &chd_vao);
     glDeleteProgram(flat.prog);
+    pi_reader.close();
     SDL_GL_DeleteContext(gl);
     SDL_DestroyWindow(win);
     SDL_Quit();

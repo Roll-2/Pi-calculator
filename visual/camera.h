@@ -114,6 +114,18 @@ static inline void mat4_lookat(mat4 m, v3 eye, v3 center, v3 up) {
     for (int i = 0; i < 16; ++i) m[i] = r[i];
 }
 
+// Proiezione ortografica (column-major, standard glOrtho)
+static inline void mat4_ortho(mat4 m, float l, float r, float b, float t, float n, float f) {
+    for (int i = 0; i < 16; ++i) m[i] = 0.0f;
+    m[0]  = 2.0f / (r - l);
+    m[5]  = 2.0f / (t - b);
+    m[10] = -2.0f / (f - n);
+    m[12] = -(r + l) / (r - l);
+    m[13] = -(t + b) / (t - b);
+    m[14] = -(f + n) / (f - n);
+    m[15] = 1.0f;
+}
+
 // ------------------------------- keyframe -------------------------------
 struct Keyframe {
     double t;      // tempo del clock globale [s]
