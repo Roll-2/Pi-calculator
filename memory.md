@@ -52,9 +52,14 @@ Aggiornato a ogni STEP, non a fine sessione.
 - [x] STEP 13 — Performance committato (7f0f229): sample 3 s + ps: processo vsync-bound (SDL_CondWait su swap), CPU 7–14% di un core su 12, molto sotto il target di 2 core. Nessun collo di bottiglia: nessuna modifica al codice.
 - [x] STEP 14 — Documentazione: README aggiornato in EN+IT con sezioni "pi_calc — the unified calculator" (CLI, barriera RAM) e "Pi-visual — the π visualizer" (pannelli, tasti, --pi, limiti), tabelle e struttura progetto aggiornate. .gitignore già completo dai tempi di STEP 1 (pi_calc, Pi-visual, pi_*.txt, visual/*.o, pictures/, !Makefile). memory.md mantenuto passo per passo.
 
+- [x] STEP 15 — Verifica finale: pi_calc default OK (314161 byte, 3.14159..., verifica OK, 0,28 s); -N 1e9 rifiutato con messaggio RAM; make clean/all OK; Pi-visual vivo e stabile ~270 s continui attraversando entrambi i dolly-in (t≈89 s, t≈120 s) e la stabilizzazione, 12–19% CPU, 0,8% MEM, log vuoto, swap invariato; output di test intermedi rimossi; git log ordinato per STEP. Nota: tasti S/R/F/Esc verificati per codice e la pipeline S end-to-end col test GL offscreen; la verifica interattiva dei tasti richiede l'utente alla finestra.
+
+## Riepilogo finale
+
+Sessione completata: 16 commit (STEP 0-15). pi_calc.cpp unificato con barriera RAM dura (nessun override) e verifica integrata; Pi-visual completo di pendolo con coreografia 14π/226π, chord streaming con fade, rate condivisa tarata (100M cifre in ~120 s), HUD, 4 palette, screenshot/reset/fullscreen. README e memory aggiornati. fractals.cpp/Hydrogen3D.cpp mai esistiti nel repo: nessun riferimento toccato; pi300k.cpp, pi100m.cpp, pi300k.txt, pi100m.txt intatti (mtime e contenuti originali).
+
 ## Prossimi passi
 
-- STEP 15: verifica finale end-to-end (pi_calc default + rifiuto RAM, run Pi-visual ~2 min, controlli wc/head, git log).
 - Estensioni opzionali proposte (da NON implementare senza richiesta): audio sonificato dal pendolo, esportazione PNG del chord diagram, rate configurabile da CLI.
 
 ## Decisioni (aggiunta STEP 8)
