@@ -125,6 +125,17 @@ static inline double rate_of(double t) {
     double r = RATE_A * (std::exp(RATE_K * t) - 1.0);
     return r < RATE_MAX ? r : RATE_MAX;
 }
+static const double RATE_T_SAT = 120.0;   // t oltre il quale rate è costante
+static double rate_integral_sat() {       // ∫rate su [0, T_SAT]
+    return RATE_A / RATE_K * (std::exp(RATE_K * RATE_T_SAT) - 1.0);
+}
+// Inversa dell'integrale: t tale che le cifre consumate siano `digits`
+// (prima della saturazione: t = ln(k·x/A + 1)/k; dopo: tratto lineare).
+static double rate_inverse(double digits) {
+    static const double r_sat = rate_integral_sat();
+    if (digits <= r_sat) return std::log(digits * RATE_K / RATE_A + 1.0) / RATE_K;
+    return RATE_T_SAT + (digits - r_sat) / RATE_MAX;
+}
 
 int main(int argc, char* argv[]) {
     const char* pi_path = "pi100m.txt";   // argomento --pi <file> per cambiarlo
@@ -228,23 +239,33 @@ int main(int argc, char* argv[]) {
     chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
     chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
-    // ---- pendolo: polilinea statica θ ∈ [0, 100] (STEP 7) ----
-    std::vector<PendulumVertex> pend_strip;
-    pendulum_build_strip(100.0, 0.02, pend_strip);
-    GLuint pend_vao = 0, pend_vbo = 0;
-    glGenVertexArrays(1, &pend_vao);
-    glBindVertexArray(pend_vao);
-    glGenBuffers(1, &pend_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, pend_vbo);
-    glBufferData(GL_ARRAY_BUFFER, pend_strip.size() * sizeof(PendulumVertex),
-                 pend_strip.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex), (void*)(2 * sizeof(float)));
-    glBindVertexArray(0);
-    const GLsizei pend_count = (GLsizei)pend_strip.size();
-    pend_strip.clear(); pend_strip.shrink_to_fit();
+    // ---- pendolo animato (STEP 8): stream circolare + coreografia camera ----
+    // La curva si completa quando sono state consumate tutte le cifre del file:
+    // θ_target = THETA_MAX · (cifre consumate / cifre totali).
+    const double THETA_MAX = 226.0 * PI_PEND;   // ≈ 710 rad (fine coreografia)
+    PendulumStream pend_stream;
+    pend_stream.init_gl(THETA_MAX);
+
+    // Coreografia scritta in θ e convertita in tempo con l'inversa di rate(t),
+    // così i dolly-in cadono ESATTAMENTE quando θ attraversa i punti critici,
+    // qualunque sia la lunghezza del file π:
+    //   1. vista ampia finché θ < 14π (quasi-chiusura 22/7, gap ≈ 0.056)
+//   2. dolly-in a (2, 0) mentre θ attraversa 14π (zoom 14: il gap ≈ 0.056
+//      riempie ~1/6 dell'altezza del viewport → ben visibile)
+    //   3. si resta sul punto mentre la curva si addensa, finché θ → 226π
+    //   4. secondo dolly-in più profondo (zoom 190: gap ≈ 0.0002 → ~sottopixel)
+    const double th_1 = 14.0 * PI_PEND, th_2 = 226.0 * PI_PEND;
+    const double total_digits = (double)pi_reader.decimal_digits();
+    auto t_for_theta = [&](double th) { return rate_inverse(th / THETA_MAX * total_digits); };
+    const Keyframe pend_kf[] = {
+        {0.0,                        0.0f, 0.0f, 1.0f},
+        {t_for_theta(th_1),          0.0f, 0.0f, 1.0f},
+        {t_for_theta(th_1) + 2.5,    2.0f, 0.0f, 14.0f},
+        {t_for_theta(th_2) - 3.0,    2.0f, 0.0f, 14.0f},
+        {t_for_theta(th_2),          2.0f, 0.0f, 190.0f},
+        {t_for_theta(th_2) + 600.0,  2.0f, 0.0f, 190.0f},
+    };
+    const int pend_nkf = (int)(sizeof(pend_kf) / sizeof(pend_kf[0]));
 
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 t_start = SDL_GetPerformanceCounter();
@@ -266,21 +287,24 @@ int main(int argc, char* argv[]) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        // ---- viewport sinistro: pendolo statico Z(θ), θ ∈ [0, 100] (STEP 7) ----
+        // ---- viewport sinistro: pendolo animato con keyframe (STEP 8) ----
         glViewport(0, 0, half, h);
         glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         {
-            // camera fissa che inquadra tutta la curva (max |Z| ≈ 2)
+            double theta_target = THETA_MAX * ((double)stream.base_index / total_digits);
+            pend_stream.advance(theta_target);
+
+            Keyframe k = keyframe_eval(pend_kf, pend_nkf, t);
+            float half_ext = 2.4f / k.zoom;   // zoom = dolly-in (camera frontale)
             float aspect = (float)half / (float)h;
             mat4 O;
-            mat4_ortho(O, -2.4f * aspect, 2.4f * aspect, -2.4f, 2.4f, -1.0f, 1.0f);
+            mat4_ortho(O, k.x - half_ext * aspect, k.x + half_ext * aspect,
+                            k.y - half_ext, k.y + half_ext, -1.0f, 1.0f);
             glUseProgram(flat.prog);
             glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, O);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glBindVertexArray(pend_vao);
-            glDrawArrays(GL_LINE_STRIP, 0, pend_count);
-            glBindVertexArray(0);
+            pend_stream.render(flat.u_alpha);
             glUseProgram(0);
         }
 
@@ -335,8 +359,7 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(win);
     }
 
-    glDeleteBuffers(1, &pend_vbo);
-    glDeleteVertexArrays(1, &pend_vao);
+    pend_stream.destroy_gl();
     glDeleteBuffers(1, &sec_vbo);
     glDeleteVertexArrays(1, &sec_vao);
     glDeleteBuffers(1, &chd_vbo);
