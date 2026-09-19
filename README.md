@@ -302,9 +302,11 @@ Afterwards the app stays alive with the stabilized animation and the HUD.
   camera choreography dollies in exactly when θ crosses the two famous
   near-closures of π: 14π (gap ≈ 0.056) and 226π (gap ≈ 0.0002, sub-pixel).
 - **right — chord diagram** of the digits of π read from `pi100m.txt` via
-  `mmap` (never copied into memory): 10 colored sectors (0–9), one chord per
-  consecutive digit pair, a rolling window of the last 5,000 chords with
-  fading alpha, additive blending. The 100M digits are streamed in ~120 s.
+  `mmap` (never copied into memory): 10 colored sectors (0–9) with large
+  digit labels around the ring, one **curved** chord (quadratic Bézier) per
+  consecutive digit pair with anchor points spread along each sector arc,
+  a rolling window of the last 5,000 chords with fading alpha, additive
+  blending. The 100M digits are streamed in ~120 s.
 
 ### Build & run
 
@@ -334,6 +336,11 @@ make           # builds Pi-visual (see the Makefile or the header comment)
   `/System/Library/Fonts/Helvetica.ttc` (no external assets).
 - The mmap'd digits file does not count toward any RAM budget: resident
   memory stays ~100 MB even with the 100M-digit file.
+- With `PI_VISUAL_CHECK=1` the app runs an automatic framebuffer diagnostic
+  at t = 20 s (ring centering/roundness, chord color variety, pendulum
+  visibility, big digit labels) and saves control PNGs into `pictures/`.
+  `PI_VISUAL_LABEL_COLOR=1` additionally draws the labels in pure magenta
+  so the check can count their pixels.
 
 ## Project layout
 
@@ -668,9 +675,11 @@ così i due pannelli accelerano insieme e l'animazione significativa dura
   due famose quasi-chiusure di π: 14π (gap ≈ 0,056) e 226π (gap ≈ 0,0002,
   sottopixel).
 - **destro — chord diagram** delle cifre di π lette da `pi100m.txt` via
-  `mmap` (mai copiate in memoria): 10 settori colorati (0–9), una corda per
-  coppia di cifre consecutive, rolling window delle ultime 5.000 corde con
-  alpha decrescente, blending additivo. Le 100M cifre scorrono in ~120 s.
+  `mmap` (mai copiate in memoria): 10 settori colorati (0–9) con le cifre
+  grandi attorno all'anello, una corda **curva** (Bézier quadratica) per
+  ogni coppia di cifre consecutive con ancoraggi distribuiti lungo l'arco
+  di ogni settore, rolling window delle ultime 5.000 corde con alpha
+  decrescente, blending additivo. Le 100M cifre scorrono in ~120 s.
 
 ### Compilazione ed esecuzione
 
@@ -700,6 +709,16 @@ make           # compila Pi-visual (vedi il Makefile o il commento in testa)
   `/System/Library/Fonts/Helvetica.ttc` (nessun asset esterno).
 - Il file mmap di cifre non pesa su nessun budget RAM: la memoria residente
   resta ~100 MB anche con il file da 100M cifre.
+- Con `PI_VISUAL_CHECK=1` l'app esegue a t = 20 s una diagnostica automatica
+  del framebuffer (centratura/rotondità dell'anello, varietà di colore delle
+  corde, visibilità del pendolo, cifre grandi) e salva PNG di controllo in
+  `pictures/`. Con `PI_VISUAL_LABEL_COLOR=1` le etichette vengono inoltre
+  disegnate in magenta puro perché il check possa contarne i pixel.
+- Con `PI_VISUAL_CHECK=1` l'app esegue a t = 20 s una diagnostica automatica
+  del framebuffer (centratura/rotondità dell'anello, varietà di colore delle
+  corde, visibilità del pendolo, cifre grandi) e salva PNG di controllo in
+  `pictures/`. Con `PI_VISUAL_LABEL_COLOR=1` le etichette vengono inoltre
+  disegnate in magenta puro perché il check possa contarne i pixel.
 
 ## Struttura del progetto
 

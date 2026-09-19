@@ -30,6 +30,10 @@
 #include <SDL.h>
 #include <OpenGL/gl3.h>
 
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -180,6 +184,8 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);      // anti-aliasing
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);      // 4x MSAA
 
     SDL_Window* win = SDL_CreateWindow(
         "Pi-visual — pendolo composto + chord diagram di π",
@@ -261,14 +267,7 @@ int main(int argc, char* argv[]) {
         chord_chd_v_count = (GLsizei)cv.size();
     };
 
-    // ---- streaming delle corde (STEP 6): rolling window con fade ----
-    // Ancoraggi precalcolati delle 10 cifre (evita trig per ogni corda emessa).
-    float anchors[10][2];
-    for (int d = 0; d < 10; ++d) {
-        float a = chord_digit_angle(d);
-        anchors[d][0] = CHORD_RADIUS * std::cos(a);
-        anchors[d][1] = CHORD_RADIUS * std::sin(a);
-    }
+    // ---- streaming delle corde (STEP 6): rolling window, fade in shader ----
     ChordStream stream;
     if (!stream.init_gl()) {
         std::fprintf(stderr, "Inizializzazione VBO streaming fallita\n");
@@ -278,9 +277,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // ---- HUD (STEP 10): SDL_ttf + cache di texture ----
+    // ---- HUD (STEP 10): SDL_ttf + cache di texture (3 corpi: normale, piccolo, cifre) ----
     HudText hud;
-    if (!hud.init(22, 16)) {
+    if (!hud.init(22, 16, 52)) {
         std::fprintf(stderr, "Inizializzazione HUD fallita\n");
         stream.destroy_gl();
         SDL_GL_DeleteContext(gl);
@@ -293,8 +292,18 @@ int main(int argc, char* argv[]) {
     // La curva si completa quando sono state consumate tutte le cifre del file:
     // θ_target = THETA_MAX · (cifre consumate / cifre totali).
     const double THETA_MAX = 226.0 * PI_PEND;   // ≈ 710 rad (fine coreografia)
+    const double total_digits = (double)pi_reader.decimal_digits();
     PendulumStream pend_stream;
     pend_stream.init_gl(THETA_MAX);
+    // Il progresso reale (esponenziale) è quasi piatto per il primo minuto:
+    // il pendolo verrebbe disegnato a scatti. L'easing lo porta davanti con
+    // una rampa visibile, poi lo lascia raggiungere dal progresso reale
+    // (tutti i riaggiustamenti sono in avanti: la curva non retrocede mai).
+    auto pend_theta_target = [&](double t_now) {
+        double real = THETA_MAX * ((double)stream.base_index / total_digits);
+        double eased = (THETA_MAX / 45.0) * t_now;
+        return eased > real ? eased : real;
+    };
 
     // Coreografia scritta in θ e convertita in tempo con l'inversa di rate(t),
     // così i dolly-in cadono ESATTAMENTE quando θ attraversa i punti critici,
@@ -305,7 +314,6 @@ int main(int argc, char* argv[]) {
     //   3. si resta sul punto mentre la curva si addensa, finché θ → 226π
     //   4. secondo dolly-in più profondo (zoom 190: gap ≈ 0.0002 → ~sottopixel)
     const double th_1 = 14.0 * PI_PEND, th_2 = 226.0 * PI_PEND;
-    const double total_digits = (double)pi_reader.decimal_digits();
     auto t_for_theta = [&](double th) { return rate_inverse(th / THETA_MAX * total_digits); };
     const Keyframe pend_kf[] = {
         {0.0,                        0.0f, 0.0f, 1.0f},
@@ -319,6 +327,13 @@ int main(int argc, char* argv[]) {
 
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 t_start = SDL_GetPerformanceCounter();
+
+    // Verifica geometrica automatica (PI_VISUAL_CHECK=1): a t=20 s misura nel
+    // framebuffer centratura dell'anello, varietà di colore delle corde e
+    // visibilità del pendolo, e salva un PNG di controllo in pictures/.
+    const bool selfcheck = std::getenv("PI_VISUAL_CHECK") != nullptr;
+    bool selfcheck_done = false;      // parte geometrica (prima dell'HUD)
+    bool selfcheck_hud_done = false;  // parte etichette (dopo l'HUD)
 
     bool fullscreen = false;
     bool screenshot_requested = false;
@@ -359,15 +374,20 @@ int main(int argc, char* argv[]) {
         int half = w / 2;
 
         glEnable(GL_BLEND);
+        glEnable(GL_MULTISAMPLE);   // anti-aliasing delle corde (4x MSAA)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        // Un solo clear per frame sull'intera finestra: glClear ignora il
+        // viewport (senza scissor test), quindi i clear per-viewport si
+        // cancellano a vicenda e il pendolo risultava invisibile.
+        glViewport(0, 0, w, h);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
 
         // ---- viewport sinistro: pendolo animato con keyframe (STEP 8) ----
         glViewport(0, 0, half, h);
-        glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
         {
-            double theta_target = THETA_MAX * ((double)stream.base_index / total_digits);
-            pend_stream.advance(theta_target);
+            pend_stream.advance(pend_theta_target(t));
 
             Keyframe k = keyframe_eval(pend_kf, pend_nkf, t);
             float half_ext = 2.4f / k.zoom;   // zoom = dolly-in (camera frontale)
@@ -413,40 +433,129 @@ int main(int argc, char* argv[]) {
         if (to_emit > 0) {
             if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
             stream.frac_acc -= (double)to_emit;
-            stream.push(t, pi_reader, anchors, CHORD_CURRENT_PALETTE, to_emit);
+            stream.push(t, pi_reader, CHORD_CURRENT_PALETTE, to_emit);
         }
 
-        // ---- viewport destro: chord diagram statico (STEP 5) ----
+        // ---- viewport destro: chord diagram (stile digit circle) ----
         glViewport(half, 0, w - half, h);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
         {
+            // ortho quadrata con margine (CHORD_WORLD): cerchio centrato e
+            // sempre interamente visibile, cifre incluse
             float aspect = (float)(w - half) / (float)h;
             mat4 O;
-            mat4_ortho(O, -aspect, aspect, -1.0f, 1.0f, -1.0f, 1.0f);
+            mat4_ortho(O, -CHORD_WORLD * aspect, CHORD_WORLD * aspect,
+                            -CHORD_WORLD, CHORD_WORLD, -1.0f, 1.0f);
 
             glUseProgram(flat.prog);
             glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, O);
 
-            // settori: alpha blending standard
+            // settori: alpha blending standard, pieni (come nei riferimenti)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glUniform1f(flat.u_alpha, 0.6f);
+            glUniform1f(flat.u_alpha, 0.85f);
             glBindVertexArray(sec_vao);
             glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_sec_v_count);
 
-            // corde statiche: additivo, molto tenui (contesto per lo streaming)
+            // corde statiche: additivo, tenui (contesto per lo streaming)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            glUniform1f(flat.u_alpha, 0.10f);
+            glUniform1f(flat.u_alpha, 0.5f);
             glBindVertexArray(chd_vao);
             glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_chd_v_count);
 
-            // corde in streaming: additivo, alpha per-vertex con fade temporale
+            // corde in streaming: additivo, fade calcolato nello shader
             glUniform1f(flat.u_alpha, 1.0f);
             stream.render(t, flat.u_mvp, O);
 
             glBindVertexArray(0);
             glUseProgram(0);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
+
+        // ---- verifica geometrica automatica (una tantum, a t>20 s) ----
+        if (selfcheck && !selfcheck_done && t > 20.0) {
+            selfcheck_done = true;
+            std::vector<uint8_t> px((size_t)w * h * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+            auto px_at = [&](int x, int y) -> const uint8_t* {   // y=0 in ALTO
+                return &px[((size_t)(h - 1 - y) * w + x) * 3];
+            };
+            auto lum = [&](const uint8_t* p) { return std::max({p[0], p[1], p[2]}); };
+
+            // 1) centratura/rotondità anello: bounding box di tutti i pixel
+            // accesi nel half destro (le corde restano dentro l'anello)
+            int xl = w, xr = -1, yt = h, yb = -1;
+            for (int y = 0; y < h; ++y)
+                for (int x = half; x < w; ++x) {
+                    if (lum(px_at(x, y)) > 24) {
+                        if (x < xl) xl = x;
+                        if (x > xr) xr = x;
+                        if (y < yt) yt = y;
+                        if (y > yb) yb = y;
+                    }
+                }
+            float cx_ring = 0.5f * (xl + xr), cy_ring = 0.5f * (yt + yb);
+            float want_cx = half + (w - half) * 0.5f, want_cy = h * 0.5f;
+            float rad_h = 0.5f * (xr - xl), rad_v = 0.5f * (yb - yt);
+            std::printf("CHECK centro anello: (%.0f,%.0f) atteso (%.0f,%.0f)  "
+                        "raggi h/v: %.0f/%.0f (rapporto %.3f)\n",
+                        cx_ring, cy_ring, want_cx, want_cy, rad_h, rad_v, rad_v / rad_h);
+            bool centered = std::fabs(cx_ring - want_cx) < 0.03f * (w - half) &&
+                            std::fabs(cy_ring - want_cy) < 0.03f * h &&
+                            std::fabs(rad_v / rad_h - 1.0f) < 0.05f;
+            std::printf("CHECK centratura: %s\n", centered ? "OK" : "FALLITA");
+
+            // 2) varietà di colore nel disco centrale (corde curve colorate)
+            std::vector<bool> seen(1 << 12, false);
+            int buckets = 0;
+            for (int y = (int)(want_cy - 0.35f * rad_v); y < (int)(want_cy + 0.35f * rad_v); y += 2)
+                for (int x = (int)(want_cx - 0.35f * rad_h); x < (int)(want_cx + 0.35f * rad_h); x += 2) {
+                    const uint8_t* p = px_at(x, y);
+                    if (lum(p) < 30) continue;
+                    uint16_t key = (uint16_t)((p[0] >> 4) << 8 | (p[1] >> 4) << 4 | (p[2] >> 4));
+                    if (!seen[key]) { seen[key] = true; buckets++; }
+                }
+            std::printf("CHECK tinte nel disco: %d (attese > 15 per corde colorate)\n", buckets);
+            bool colorful = buckets > 15;
+            std::printf("CHECK corde colorate: %s\n", colorful ? "OK" : "FALLITO");
+
+            // 3) pendolo: pixel non neri nel half sinistro + bounding box
+            long long lit = 0;
+            int pl = w, pr = -1, pt = h, pb = -1;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < half; ++x) {
+                    if (lum(px_at(x, y)) > 20) {
+                        lit++;
+                        if (x < pl) pl = x;
+                        if (x > pr) pr = x;
+                        if (y < pt) pt = y;
+                        if (y > pb) pb = y;
+                    }
+                }
+            double ratio_l = (double)lit / ((double)half * h);
+            std::printf("CHECK pendolo: lit=%.3f%% bbox=[%d..%d]x[%d..%d] (viewport %dx%d)\n",
+                        100.0 * ratio_l, pl, pr, pt, pb, half, h);
+            bool pend_ok = ratio_l > 0.002 && (pr - pl) > 0.4f * half && (pb - pt) > 0.4f * h;
+            std::printf("CHECK pendolo visibile: %s\n", pend_ok ? "OK" : "FALLITO");
+
+            // Mappa ASCII del half destro (48×24): forma dell'anello a colpo d'occhio
+            for (int ry = 0; ry < 24; ++ry) {
+                std::string row;
+                for (int rx = 0; rx < 48; ++rx) {
+                    long acc = 0; int n = 0;
+                    int x0 = half + (w - half) * rx / 48, x1 = half + (w - half) * (rx + 1) / 48;
+                    int y0 = h * ry / 24,             y1 = h * (ry + 1) / 24;
+                    for (int y = y0; y < y1; y += 4) for (int x = x0; x < x1; x += 4) {
+                        acc += lum(px_at(x, y)); n++;
+                    }
+                    long m = n ? acc / n : 0;
+                    row += (m > 120 ? '#' : m > 60 ? '+' : m > 24 ? '.' : ' ');
+                }
+                std::printf("MAP |%s|\n", row.c_str());
+            }
+
+            std::string shot = screenshot_save("pictures/check_20s");
+            std::printf("CHECK screenshot: %s\n", shot.c_str());
+            std::fflush(stdout);
         }
 
         // ---- HUD (STEP 10): pixel ortho sull'intera finestra ----
@@ -469,6 +578,30 @@ int main(int argc, char* argv[]) {
                 float tw = hud.width(*lines[i]);
                 hud.draw(*lines[i], (float)w - 16.0f - tw, (float)h - 14.0f - i * hud.line_h,
                          1, 1, 1, 0.9f);
+            }
+
+            // cifre 0-9 attorno al cerchio del chord (grande, colore del settore):
+            // posizione = trasformazione mondo->pixel del viewport destro
+            {
+                float vh2 = (float)(w - half) < (float)h ? (float)(w - half) : (float)h;
+                float scale = vh2 / (2.0f * CHORD_WORLD);
+                float ccx = (float)half + (float)(w - half) * 0.5f;
+                float ccy = (float)h * 0.5f;
+                for (int d = 0; d < 10; ++d) {
+                    float a = chord_digit_angle(d);
+                    float wx = CHORD_RLABEL * std::cos(a);
+                    float wy = CHORD_RLABEL * std::sin(a);
+                    const float* c = CHORD_CURRENT_PALETTE[d];
+                    // PI_VISUAL_LABEL_COLOR=1: cifre in magenta puro (probe del check)
+                    const bool lbl_dbg = std::getenv("PI_VISUAL_LABEL_COLOR") != nullptr;
+                    char lbl[2] = {(char)('0' + d), 0};
+                    float tw = hud.width(lbl, 2);
+                    float th = hud.get(lbl, 2).h;
+                    hud.draw(lbl, ccx + wx * scale - tw * 0.5f,
+                                  ccy + wy * scale - th * 0.5f,
+                             lbl_dbg ? 1.0f : c[0], lbl_dbg ? 0.0f : c[1],
+                             lbl_dbg ? 1.0f : c[2], 1.0f, /*big=*/2, /*y_is_top=*/false);
+                }
             }
 
             // legenda delle 10 cifre in basso a sinistra: quad colorato + cifra
@@ -500,11 +633,33 @@ int main(int argc, char* argv[]) {
                 glUseProgram(hud.prog);
                 glUniformMatrix4fv(hud.u_mvp, 1, GL_FALSE, H);
                 hud.draw(lbl, 34.0f, 17.0f + (9 - d) * 18.0f + 12.0f,
-                         c[0], c[1], c[2], 0.95f, /*small=*/true);
+                         c[0], c[1], c[2], 0.95f, /*small=*/1);
             }
             glUseProgram(0);
         }
         hud.prune();
+
+        // ---- verifica etichette (dopo l'HUD: con PI_VISUAL_LABEL_COLOR=1 le
+        // cifre grandi sono magenta puro) + screenshot finale del check ----
+        if (selfcheck && selfcheck_done && !selfcheck_hud_done && t > 20.0) {
+            selfcheck_hud_done = true;
+            std::vector<uint8_t> px2((size_t)w * h * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px2.data());
+            long magenta = 0;
+            for (int y = 0; y < h; ++y)
+                for (int x = half; x < w; ++x) {
+                    const uint8_t* p = &px2[((size_t)(h - 1 - y) * w + x) * 3];
+                    if (p[0] > 200 && p[1] < 40 && p[2] > 200) magenta++;
+                }
+            if (std::getenv("PI_VISUAL_LABEL_COLOR")) {
+                std::printf("CHECK magenta cifre: %ld px (attesi > 1500)\n", magenta);
+                std::printf("CHECK etichette: %s\n", magenta > 1500 ? "OK" : "FALLITO");
+            }
+            std::string shot = screenshot_save("pictures/check_hud");
+            std::printf("CHECK screenshot HUD: %s\n", shot.c_str());
+            std::fflush(stdout);
+        }
 
         // ---- reset (tasto R): clock e stream da capo ----
         if (reset_requested) {

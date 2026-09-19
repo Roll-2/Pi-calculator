@@ -1,20 +1,25 @@
 // ============================================================
-// chord.h — chord diagram delle cifre di π
+// chord.h — chord diagram delle cifre di π (stile "digit circle")
 //
-// 10 settori (uno per cifra 0–9) disposti in cerchio in senso orario partendo
-// dall'alto; ogni coppia di cifre consecutive (d[k], d[k+1]) è una corda tra
-// il settore di d[k] e quello di d[k+1].
+// Estetica di riferimento (esempi forniti dall'utente):
+//   - anello pastello spesso con gap e cifre grandi ACCANTO a ogni settore;
+//   - corde CURVE (Bézier quadratiche con controllo verso il centro),
+//     sottili, semitrasparenti, distribuite — niente ventagli convergenti;
+//   - tutto centrato nel viewport e interamente visibile.
 //
-// La geometria è pre-costruita come mesh di triangoli (su macOS GL 3.3 core
-// glLineWidth è limitato a 1, quindi lo spessore delle corde viene dalla
-// geometria: quad per corda con larghezza proporzionale a sqrt(conteggio)).
-// Il colore della corda è quello della cifra di partenza; l'alpha cresce con
-// il conteggio normalizzato (usato con blending additivo).
-//
-// Streaming (STEP 6): rolling window circolare delle ultime N corde; ogni
-// corda memorizza il tempo di emissione e ogni frame l'alpha di fade viene
-// ricalcolata sulla CPU (degrada verso il nero in FADE_S secondi; con il
-// blending additivo rgb·alpha → 0 significa davvero spegnersi).
+// Dettagli tecnici:
+//   - ogni settore ha SUB_ANCH punti di aggancio distribuiti lungo l'arco:
+//     la k-esima corda che tocca la cifra d usa l'ancoraggio (k mod SUB_ANCH),
+//     così le corde si distribuiscono invece di sovrapporsi;
+//   - la corda è una Bézier quadratica approssimata con BEZ_SEG segmenti;
+//     il punto di controllo è verso il centro (fattore BEZ_BOW), quindi le
+//     corde lunghe si curvano dolcemente dentro il cerchio;
+//   - lo spessore è in unità mondo (corde ~0.004): visibile ma sottile;
+//   - il fade temporale delle corde in streaming è calcolato NELLO SHADER
+//     (uniform u_now + tempo di emissione per corda): zero upload per frame
+//     anche con migliaia di corde;
+//   - l'anello (raggio esterno 1.0) è disegnato con ortho [-1.25·a, 1.25·a]
+//     × [-1.25, 1.25]: sempre centrato, mai tagliato, con margine per le cifre.
 //
 // Self-test temporaneo (non è un binario ufficiale):
 //   clang++ -x c++ -std=c++17 -DCHORD_TEST visual/chord.h -o chord_test \
@@ -22,12 +27,17 @@
 // ============================================================
 #pragma once
 
+#ifndef GL_SILENCE_DEPRECATION
+#define GL_SILENCE_DEPRECATION
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
 #include <OpenGL/gl3.h>
 
+#include "camera.h"     // mat4 (column-major) per il render dello stream
 #include "pi_reader.h"
 
 // Palette (STEP 11): la 0 è la tinta vivace provvisoria, la 1-3 sono le
@@ -84,9 +94,7 @@ static const float CHORD_PALETTES[4][10][3] = {
 };
 static const char* CHORD_PALETTE_NAMES[4] = {"provvisoria", "Botanica", "Alba", "Notturna"};
 
-// Palette corrente (switchabile a runtime con i tasti 0–3): le mesh statiche
-// vengono ricostruite al cambio; le corde in streaming usano questa al momento
-// dell'emissione (le corde già emesse conservano il loro colore).
+// Palette corrente (switchabile a runtime con i tasti 0–3).
 static const float (*CHORD_CURRENT_PALETTE)[3] = CHORD_PALETTES[1];   // default: Botanica
 
 // Vertice condiviso con lo shader flat: pos.xy + rgba
@@ -94,12 +102,52 @@ struct ChordVertex {
     float x, y, r, g, b, a;
 };
 
+// ---------------------------------------------------------------
+// Geometria del cerchio
+// ---------------------------------------------------------------
+static constexpr float CHORD_RO       = 1.00f;  // raggio esterno dell'anello
+static constexpr float CHORD_RI       = 0.86f;  // raggio interno (anello spesso)
+static constexpr float CHORD_RANCH    = 0.86f;  // ancoraggi corde: bordo interno anello
+static constexpr float CHORD_RLABEL   = 1.13f;  // raggio delle cifre attorno
+static constexpr float CHORD_WORLD    = 1.25f;  // half-extent verticale dell'ortho
+static constexpr float CHORD_WIDTH    = 0.004f; // spessore corda (unità mondo)
+static constexpr float CHORD_WMAX     = 0.010f; // spessore max corda statica
+static constexpr int   CHORD_SUBANCH  = 48;     // ancoraggi distribuiti per cifra
+static constexpr int   CHORD_BEZ_SEG  = 32;     // segmenti per la Bézier (curve morbide)
+static constexpr int   CHORD_SECSUB   = 16;     // suddivisioni arco per settore
+static constexpr float CHORD_GAP_DEG  = 2.0f;   // gap tra settori (gradi)
+static constexpr float CHORD_FADE_S   = 6.0f;   // durata fade corde in streaming
+
+static constexpr float CHORD_TWO_PI = 6.28318530717958647692f;
+static constexpr float CHORD_PI     = 3.14159265358979323846f;
+
+// Angolo (radianti) del CENTRO del settore della cifra d: dall'alto, orario.
+static inline float chord_digit_angle(int d) {
+    const float SEG = CHORD_TWO_PI / 10.0f;
+    return CHORD_PI / 2.0f - (float(d) + 0.5f) * SEG;
+}
+
+// k-esimo ancoraggio della cifra d: punto distribuito lungo l'arco del settore.
+static inline void chord_anchor(int d, int k, float out[2]) {
+    const float SEG = CHORD_TWO_PI / 10.0f;
+    const float GAP = CHORD_GAP_DEG * CHORD_PI / 180.0f;
+    float a0 = chord_digit_angle(d) - SEG / 2.0f + GAP;
+    float a1 = chord_digit_angle(d) + SEG / 2.0f - GAP;
+    // distribuzione deterministica che copre l'arco (evita moiré con passo puro)
+    float s = (float)(k % CHORD_SUBANCH) / (float)(CHORD_SUBANCH - 1);
+    float jitter = ((float)((k * 2654435761u) & 0xFFFF) / 65535.0f - 0.5f)
+                   * (a1 - a0) / (float)CHORD_SUBANCH;
+    float a = a0 + (a1 - a0) * s + jitter;
+    out[0] = CHORD_RANCH * std::cos(a);
+    out[1] = CHORD_RANCH * std::sin(a);
+}
+
 struct ChordData {
     long long trans[10][10] = {};
     long long freq[10] = {};
     long long total = 0;   // cifre consumate
+    long long emitted[10] = {};   // corde già emesse per cifra d'origine (round-robin)
 
-    // Accumula le transizioni dalle prime max_digits cifre decimali.
     void accumulate(const PiReader& r, size_t max_digits) {
         size_t n = max_digits < r.decimal_digits() ? max_digits : r.decimal_digits();
         if (n == 0) return;
@@ -123,139 +171,224 @@ struct ChordData {
     }
 };
 
-// Angolo (radianti) del CENTRO del settore della cifra d: dall'alto, orario.
-static inline float chord_digit_angle(int d) {
-    const float SEG = 2.0f * 3.14159265358979323846f / 10.0f;
-    return 3.14159265358979323846f / 2.0f - (float(d) + 0.5f) * SEG;
-}
-
-// ---- mesh dei 10 settori (anello con gap): 10 triangolazioni ----
+// ---------------------------------------------------------------
+// Mesh dell'anello: 10 settori pastello con gap (triangolazioni d'arco)
+// ---------------------------------------------------------------
 static inline void chord_build_sectors(const float palette[10][3],
                                        std::vector<ChordVertex>& out,
-                                       float radius = 1.0f,
-                                       float alpha = 0.35f) {
-    const float TWO_PI = 6.28318530717958647692f;
-    const float SEG = TWO_PI / 10.0f;
-    const float GAP = 1.5f * 3.14159265358979323846f / 180.0f;  // gap tra settori
-    const float RI = radius * 0.92f, RO = radius * 1.02f;
-    const int SUB = 8;  // suddivisioni d'arco per settore
+                                       float alpha = 1.0f) {
+    const float SEG = CHORD_TWO_PI / 10.0f;
+    const float GAP = CHORD_GAP_DEG * CHORD_PI / 180.0f;
     out.clear();
-    out.reserve(10 * SUB * 6);
+    out.reserve(10 * CHORD_SECSUB * 6);
     for (int d = 0; d < 10; ++d) {
         float a0 = chord_digit_angle(d) - SEG / 2.0f + GAP;
         float a1 = chord_digit_angle(d) + SEG / 2.0f - GAP;
-        for (int k = 0; k < SUB; ++k) {
-            float s0 = a0 + (a1 - a0) * (float(k) / SUB);
-            float s1 = a0 + (a1 - a0) * (float(k + 1) / SUB);
+        for (int k = 0; k < CHORD_SECSUB; ++k) {
+            float s0 = a0 + (a1 - a0) * (float(k) / CHORD_SECSUB);
+            float s1 = a0 + (a1 - a0) * (float(k + 1) / CHORD_SECSUB);
             float c0 = std::cos(s0), s_0 = std::sin(s0);
             float c1 = std::cos(s1), s_1 = std::sin(s1);
             const float* col = palette[d];
-            // triangolo 1: (RI,s0) (RO,s0) (RO,s1)
-            out.push_back({RI * c0, RI * s_0, col[0], col[1], col[2], alpha});
-            out.push_back({RO * c0, RO * s_0, col[0], col[1], col[2], alpha});
-            out.push_back({RO * c1, RO * s_1, col[0], col[1], col[2], alpha});
-            // triangolo 2: (RI,s0) (RO,s1) (RI,s1)
-            out.push_back({RI * c0, RI * s_0, col[0], col[1], col[2], alpha});
-            out.push_back({RO * c1, RO * s_1, col[0], col[1], col[2], alpha});
-            out.push_back({RI * c1, RI * s_1, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RI * c0, CHORD_RI * s_0, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RO * c0, CHORD_RO * s_0, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RO * c1, CHORD_RO * s_1, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RI * c0, CHORD_RI * s_0, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RO * c1, CHORD_RO * s_1, col[0], col[1], col[2], alpha});
+            out.push_back({CHORD_RI * c1, CHORD_RI * s_1, col[0], col[1], col[2], alpha});
         }
     }
 }
 
-// ---- mesh delle 100 corde (una per transizione con conteggio > 0) ----
+// ---------------------------------------------------------------
+// Corda curva: Bézier quadratica P0->P1 con controllo verso il centro.
+// Larghezza costante w, triangolata come nastro lungo la curva.
+// Colore del settore d'origine; alpha uniforme (fade gestito altrove).
+// ---------------------------------------------------------------
+static inline void chord_push_curved(std::vector<ChordVertex>& out,
+                                     const float p0[2], const float p1[2],
+                                     const float col[3], float alpha, float w) {
+    // punto di controllo: verso il centro, raggio ridotto (curva dolce dentro)
+    float mx = (p0[0] + p1[0]) * 0.5f, my = (p0[1] + p1[1]) * 0.5f;
+    float ml = std::sqrt(mx * mx + my * my);
+    if (ml < 1e-9f) return;                       // corda d->d dal centro: salta
+    const float BOW = 0.62f;                      // il controllo sta al 62% del raggio
+    float cx = mx / ml * ml * BOW, cy = my / ml * ml * BOW;
+
+    // nastro: per ogni campione, perpendicolare locale alla curva
+    const int SEG = CHORD_BEZ_SEG;
+    float prev_px = 0, prev_py = 0, prev_nx = 0, prev_ny = 0;
+    for (int s = 0; s <= SEG; ++s) {
+        float u = (float)s / SEG, v = 1.0f - u;
+        float x = v * v * p0[0] + 2 * v * u * cx + u * u * p1[0];
+        float y = v * v * p0[1] + 2 * v * u * cy + u * u * p1[1];
+        // derivata della Bézier = tangente
+        float tx = 2 * v * (cx - p0[0]) + 2 * u * (p1[0] - cx);
+        float ty = 2 * v * (cy - p0[1]) + 2 * u * (p1[1] - cy);
+        float tl = std::sqrt(tx * tx + ty * ty);
+        if (tl < 1e-9f) { tx = 1; ty = 0; tl = 1; }
+        float nx = -ty / tl * w, ny = tx / tl * w;
+        if (s > 0) {
+            out.push_back({prev_px + prev_nx, prev_py + prev_ny, col[0], col[1], col[2], alpha});
+            out.push_back({prev_px - prev_nx, prev_py - prev_ny, col[0], col[1], col[2], alpha});
+            out.push_back({x + nx, y + ny, col[0], col[1], col[2], alpha});
+            out.push_back({prev_px - prev_nx, prev_py - prev_ny, col[0], col[1], col[2], alpha});
+            out.push_back({x + nx, y + ny, col[0], col[1], col[2], alpha});
+            out.push_back({x - nx, y - ny, col[0], col[1], col[2], alpha});
+        }
+        prev_px = x; prev_py = y; prev_nx = nx; prev_ny = ny;
+    }
+}
+
+// ---------------------------------------------------------------
+// Corde statiche (contesto): una Bézier per transizione con conteggio > 0,
+// spessore ~ sqrt(conteggio), alpha basso, blending additivo da parte del caller.
+// ---------------------------------------------------------------
 static inline void chord_build_static_chords(const ChordData& cd,
                                              const float palette[10][3],
-                                             std::vector<ChordVertex>& out,
-                                             float radius = 1.0f) {
+                                             std::vector<ChordVertex>& out) {
     const long long cmax = cd.max_transition();
-    if (cmax == 0) { out.clear(); return; }
-    const float RC = radius * 0.92f;      // corde fino al bordo interno dell'anello
-    const float WMIN = 0.0025f, WMAX = 0.045f;
     out.clear();
-    out.reserve(100 * 6);
+    if (cmax == 0) return;
+    out.reserve(100 * CHORD_BEZ_SEG * 6);
     for (int i = 0; i < 10; ++i) {
         for (int j = 0; j < 10; ++j) {
             long long c = cd.trans[i][j];
             if (c == 0) continue;
-            float ai = chord_digit_angle(i), aj = chord_digit_angle(j);
-            float x0 = RC * std::cos(ai), y0 = RC * std::sin(ai);
-            float x1 = RC * std::cos(aj), y1 = RC * std::sin(aj);
-            // larghezza ~ sqrt(conteggio): percettivamente più lineare del conteggio
-            float w = WMIN + (WMAX - WMIN) * std::sqrt((float)c / (float)cmax) * 0.5f;
-            float alpha = 0.22f + 0.78f * ((float)c / (float)cmax);
-            // perpendicolare alla corda
-            float dx = x1 - x0, dy = y1 - y0;
-            float len = std::sqrt(dx * dx + dy * dy);
-            if (len < 1e-9f) continue;   // transizione d->d: corda degenerata
-            float nx = -dy / len * w, ny = dx / len * w;
-            const float* col = palette[i];
-            out.push_back({x0 + nx, y0 + ny, col[0], col[1], col[2], alpha});
-            out.push_back({x0 - nx, y0 - ny, col[0], col[1], col[2], alpha});
-            out.push_back({x1 + nx, y1 + ny, col[0], col[1], col[2], alpha});
-            out.push_back({x0 - nx, y0 - ny, col[0], col[1], col[2], alpha});
-            out.push_back({x1 + nx, y1 + ny, col[0], col[1], col[2], alpha});
-            out.push_back({x1 - nx, y1 - ny, col[0], col[1], col[2], alpha});
+            float p0[2], p1[2];
+            chord_anchor(i, 0, p0);
+            chord_anchor(j, 0, p1);
+            float w = CHORD_WIDTH + (CHORD_WMAX - CHORD_WIDTH)
+                      * std::sqrt((float)c / (float)cmax);
+            float alpha = 0.10f + 0.14f * ((float)c / (float)cmax);
+            chord_push_curved(out, p0, p1, palette[i], alpha, w);
         }
     }
 }
 
-// Raggio delle corde statiche e in streaming: coincide con il bordo interno
-// dei settori (0.92), così le corde "arrivano" all'anello.
-static const float CHORD_RADIUS = 0.92f;
+// ---------------------------------------------------------------
+// Streaming: rolling window di corde recenti, fade CALCOLATO NELLO SHADER.
+// Ogni corda occupa CHORD_BEZ_SEG*6 vertici consecutivi e porta l'istante di
+// emissione come attributo (a_birth, location 2): il fragment calcola
+// alpha = 1 - (u_now - a_birth)/FADE e lo moltiplica.
+// ---------------------------------------------------------------
+static const char* CHORD_STREAM_VS =
+    "#version 330 core\n"
+    "layout(location = 0) in vec2 a_pos;\n"
+    "layout(location = 1) in vec4 a_col;\n"
+    "layout(location = 2) in float a_birth;\n"
+    "uniform mat4 u_mvp;\n"
+    "uniform float u_now;\n"
+    "out vec4 v_col;\n"
+    "void main() {\n"
+    "    gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);\n"
+    "    float age = u_now - a_birth;\n"
+    "    float f = 1.0 - age / float(";
+static const char* CHORD_STREAM_VS2 =
+    ");\n"
+    "    f = clamp(f, 0.0, 1.0);\n"
+    "    v_col = vec4(a_col.rgb, a_col.a * f * f);\n"   // fade quadratico, più morbido
+    "}\n";
 
-// ------------------------- streaming con rolling window -------------------------
-// Finestra circolare delle ultime N corde; ogni corda memorizza il tempo di
-// emissione in times[] e ogni frame l'alpha di fade viene ricalcolata sulla
-// CPU per tutti i vertici (N è piccola: 5000 corde = 30000 vertici).
-// L'upload avviene una sola volta per frame con orphaning del buffer.
+// Vertice dello stream: pos + rgba + istante di emissione (7 float).
+struct StreamVertex {
+    float x, y, r, g, b, a, birth;
+};
+
 struct ChordStream {
-    static constexpr int    N      = 5000;   // dimensione della rolling window
-    static constexpr double FADE_S = 8.0;    // durata del fade verso il nero
-    static constexpr int    VPC    = 6;      // vertici per corda (2 triangoli)
+    static constexpr int N         = 4000;
+    static constexpr int VPC       = CHORD_BEZ_SEG * 6;   // vertici per corda
+    static constexpr long long CAP_PER_FRAME = 500000;
 
-    std::vector<ChordVertex> vtx;            // N*VPC vertici (copia CPU)
-    std::vector<float>       times;          // N tempi di emissione
-    size_t    head = 0;                      // prossima corda da sovrascrivere
-    long long emitted = 0;                   // corde emesse dall'inizio
-    long long base_index = 0;                // prossima cifra da leggere (d[base_index])
-    double    frac_acc = 0.0;                // accumulo frazionario (rate·dt)
+    std::vector<StreamVertex> vtx;     // N*VPC vertici
+    std::vector<float>       birth;    // N istanti di emissione
+    size_t    head = 0;                // prossima corda da sovrascrivere
+    long long emitted = 0;
+    long long base_index = 0;          // prossima cifra da leggere
+    double    frac_acc = 0.0;
+    int       dirty_start = 0, dirty_len = 0;   // range da ricaricare sul VBO
     GLuint    vao = 0, vbo = 0;
+    GLuint    prog = 0;
+    GLint     u_mvp = -1, u_now = -1;
 
     bool init_gl() {
-        vtx.assign((size_t)N * VPC, {0, 0, 0, 0, 0, 0});
-        times.assign((size_t)N, -1e30f);     // "mai emessa": fade già esaurito
+        vtx.assign((size_t)N * VPC, {0, 0, 0, 0, 0, 0, -1e30f});
+        birth.assign((size_t)N, -1e30f);
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
         glGenBuffers(1, &vbo);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, vtx.size() * sizeof(ChordVertex),
+        glBufferData(GL_ARRAY_BUFFER, vtx.size() * sizeof(StreamVertex),
                      vtx.data(), GL_DYNAMIC_DRAW);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(ChordVertex), (void*)0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(StreamVertex), (void*)0);
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(ChordVertex),
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(StreamVertex),
                               (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(StreamVertex),
+                              (void*)(6 * sizeof(float)));
         glBindVertexArray(0);
-        return vbo != 0;
+
+        // programma con fade temporale (birth come attributo float)
+        auto compile = [](GLenum type, const char* src) -> GLuint {
+            GLuint s = glCreateShader(type);
+            glShaderSource(s, 1, &src, nullptr);
+            glCompileShader(s);
+            GLint ok = GL_FALSE;
+            glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+            if (!ok) {
+                char log[1024];
+                glGetShaderInfoLog(s, sizeof(log), nullptr, log);
+                std::fprintf(stderr, "Compilazione shader chord stream fallita:\n%s\n", log);
+                return 0;
+            }
+            return s;
+        };
+        char vs[1024];
+        std::snprintf(vs, sizeof(vs), "%s%.1f%s",
+                      CHORD_STREAM_VS, CHORD_FADE_S, CHORD_STREAM_VS2);
+        static const char* FS =
+            "#version 330 core\n"
+            "in vec4 v_col;\n"
+            "out vec4 frag;\n"
+            "void main() { frag = v_col; }\n";
+        GLuint v = compile(GL_VERTEX_SHADER, vs);
+        GLuint f = compile(GL_FRAGMENT_SHADER, FS);
+        prog = glCreateProgram();
+        glAttachShader(prog, v);
+        glAttachShader(prog, f);
+        glLinkProgram(prog);
+        glDeleteShader(v);
+        glDeleteShader(f);
+        GLint ok = GL_FALSE;
+        glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[1024];
+            glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+            std::fprintf(stderr, "Link programma chord stream fallito:\n%s\n", log);
+            return false;
+        }
+        u_mvp = glGetUniformLocation(prog, "u_mvp");
+        u_now = glGetUniformLocation(prog, "u_now");
+        return prog != 0;
     }
 
     void destroy_gl() {
         if (vbo) glDeleteBuffers(1, &vbo);
         if (vao) glDeleteVertexArrays(1, &vao);
-        vao = vbo = 0;
+        if (prog) glDeleteProgram(prog);
+        vao = vbo = prog = 0;
     }
 
-    // Reset completo (tasto R): torna all'inizio del file e svuota la finestra.
     void reset() {
         head = 0; emitted = 0; base_index = 0; frac_acc = 0.0;
-        for (auto& v : vtx) v = {0, 0, 0, 0, 0, 0};
-        for (auto& tm : times) tm = -1e30f;
+        dirty_start = dirty_len = 0;
+        for (auto& v : vtx) v = {0, 0, 0, 0, 0, 0, -1e30f};
+        for (auto& b : birth) b = -1e30f;
     }
 
-    // Legge le prossime n transizioni dal file π e le aggiunge alla finestra.
-    // Non tocca GL: l'upload avviene in render() (una sola chiamata a frame).
-    void push(double t, const PiReader& r, const float anchors[10][2],
-              const float palette[10][3], long long n) {
+    void push(double t, const PiReader& r, const float palette[10][3], long long n) {
         const size_t max_digits = r.decimal_digits();
         for (long long k = 0; k < n; ++k) {
             size_t i = (size_t)base_index;   // cifra d[i]
@@ -263,62 +396,101 @@ struct ChordStream {
             if (j >= max_digits) return;     // file finito: resta stabilizzato
             int a = r.digit(i), b = r.digit(j);
             base_index++;
-            add_chord(t, anchors[a], anchors[b], palette[a]);
+            add_chord(t, a, b, palette[a]);
         }
     }
 
-    void add_chord(double t, const float p0[2], const float p1[2], const float col[3]) {
-        float dx = p1[0] - p0[0], dy = p1[1] - p0[1];
-        float len = std::sqrt(dx * dx + dy * dy);
-        if (len < 1e-9f) return;             // transizione d->d: corda degenerata
-        const float w = 0.004f;
-        float nx = -dy / len * w, ny = dx / len * w;
-        ChordVertex* q = &vtx[head * VPC];
-        q[0] = {p0[0] + nx, p0[1] + ny, col[0], col[1], col[2], 1.0f};
-        q[1] = {p0[0] - nx, p0[1] - ny, col[0], col[1], col[2], 1.0f};
-        q[2] = {p1[0] + nx, p1[1] + ny, col[0], col[1], col[2], 1.0f};
-        q[3] = q[1];
-        q[4] = q[2];
-        q[5] = {p1[0] - nx, p1[1] - ny, col[0], col[1], col[2], 1.0f};
-        times[head] = (float)t;
+    void add_chord(double t, int da, int db, const float col[3]) {
+        // ancoraggi DISTRIBUITI lungo l'arco: la k-esima corda che tocca una
+        // cifra usa il k-esimo punto del settore (round-robin deterministico)
+        float p0[2], p1[2];
+        chord_anchor(da, (int)(emitted % CHORD_SUBANCH), p0);
+        chord_anchor(db, (int)((emitted * 7 + 3) % CHORD_SUBANCH), p1);
+        // il colore è quello della cifra d'arrivo (stile degli esempi: il
+        // "filo" entra nel settore del suo valore)
+        (void)col;
+        const float* c = CHORD_CURRENT_PALETTE[db];
+
+        const size_t base = head * VPC;
+        StreamVertex* q = &vtx[base];
+        // la corda viene triangolata direttamente in q (VPC vertici esatti)
+        const int SEG = CHORD_BEZ_SEG;
+        float mx = (p0[0] + p1[0]) * 0.5f, my = (p0[1] + p1[1]) * 0.5f;
+        float ml = std::sqrt(mx * mx + my * my);
+        if (ml < 1e-6f) return;   // corda degenerata: non consuma slot
+        const float BOW = 0.62f;
+        float cx = mx * BOW, cy = my * BOW;   // controllo verso il centro
+        const float b = (float)t;
+        int out = 0;
+        float px = 0, py = 0, pnx = 0, pny = 0;
+        for (int s = 0; s <= SEG; ++s) {
+            float u = (float)s / SEG, v = 1.0f - u;
+            float x = v * v * p0[0] + 2 * v * u * cx + u * u * p1[0];
+            float y = v * v * p0[1] + 2 * v * u * cy + u * u * p1[1];
+            float tx = 2 * v * (cx - p0[0]) + 2 * u * (p1[0] - cx);
+            float ty = 2 * v * (cy - p0[1]) + 2 * u * (p1[1] - cy);
+            float tl = std::sqrt(tx * tx + ty * ty);
+            if (tl < 1e-9f) { tx = 1; ty = 0; tl = 1; }
+            float nx = -ty / tl * CHORD_WIDTH, ny = tx / tl * CHORD_WIDTH;
+            if (s > 0) {
+                q[out++] = {px + pnx, py + pny, c[0], c[1], c[2], 0.55f, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.55f, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.55f, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.55f, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.55f, b};
+                q[out++] = {x - nx, y - ny, c[0], c[1], c[2], 0.55f, b};
+            }
+            px = x; py = y; pnx = nx; pny = ny;
+        }
+        // out == VPC per costruzione (SEG triangolazioni x 6 vertici)
+
+        birth[head] = (float)t;
         head = (head + 1) % (size_t)N;
         emitted++;
+        dirty_len += VPC;
+        if (dirty_len > (int)vtx.size()) dirty_len = (int)vtx.size();
     }
 
-    // Ricalcola l'alpha di fade e ridisegna la finestra. Richiede che il
-    // chiamante abbia già: glUseProgram(flat.prog), u_alpha=1, blending additivo.
-    void render(double t_now, GLint u_mvp_loc, const mat4 mvp) {
+    // Carica SOLO le corde nuove (il fade è nello shader: il resto non cambia)
+    // e disegna l'intera finestra.
+    void render(double t_now, GLint mvp_loc, const mat4 mvp) {
         if (emitted == 0) return;
-        const float inv_fade = (float)(1.0 / FADE_S);
-        for (size_t c = 0; c < (size_t)N; ++c) {
-            float age = (float)t_now - times[c];
-            float f = 1.0f - age * inv_fade;
-            if (f < 0.0f) f = 0.0f; else if (f > 1.0f) f = 1.0f;
-            f = f * f;                       // fade quadratico, più morbido
-            ChordVertex* q = &vtx[c * VPC];
-            q[0].a = f; q[1].a = f; q[2].a = f; q[3].a = f; q[4].a = f; q[5].a = f;
+        if (dirty_len > 0) {
+            const size_t bytes = sizeof(StreamVertex);
+            int start = (head - dirty_len / VPC + N) % N;   // in corde
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            if (start * VPC + dirty_len <= (int)vtx.size()) {
+                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)start * VPC * bytes,
+                                (GLsizeiptr)dirty_len * bytes, &vtx[(size_t)start * VPC]);
+            } else {   // range avvolto: due tratti
+                int first = (int)vtx.size() - start * VPC;
+                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)start * VPC * bytes,
+                                (GLsizeiptr)first * bytes, &vtx[(size_t)start * VPC]);
+                glBufferSubData(GL_ARRAY_BUFFER, 0,
+                                (GLsizeiptr)(dirty_len - first) * bytes, &vtx[0]);
+            }
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            dirty_start = 0; dirty_len = 0;
         }
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, vtx.size() * sizeof(ChordVertex),
-                     nullptr, GL_DYNAMIC_DRAW);            // orphaning
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        vtx.size() * sizeof(ChordVertex), vtx.data());
-        glUniformMatrix4fv(u_mvp_loc, 1, GL_FALSE, mvp);
+        glUseProgram(prog);
+        glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, mvp);
+        glUniform1f(u_now, (float)t_now);
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLES, 0, N * VPC);
         glBindVertexArray(0);
+        glUseProgram(0);
     }
 };
 
 #ifdef CHORD_TEST
 #include <cstdlib>
-// Self-test: bilanciamento delle cifre + costruzione mesh.
+// Self-test: bilanciamento + costruzione mesh + controlli di forma.
 int main(int argc, char* argv[]) {
     const char* path = (argc > 1) ? argv[1] : "pi100m.txt";
     PiReader r;
     if (!r.open(path)) return 1;
     ChordData cd;
-    cd.accumulate(r, 1000000);   // 1M cifre bastano per giudicare il bilanciamento
+    cd.accumulate(r, 1000000);
 
     long long mn = cd.freq[0], mx = cd.freq[0];
     for (int d = 0; d < 10; ++d) {
@@ -328,19 +500,31 @@ int main(int argc, char* argv[]) {
     }
     double ratio = (double)mx / (double)mn;
     std::printf("rapporto max/min frequenze: %.4f\n", ratio);
-    if (ratio > 1.03) {
-        std::fprintf(stderr, "FALLITO: un settore domina visivamente (ratio %.4f > 1.03)\n", ratio);
-        return 1;
-    }
+    if (ratio > 1.03) return 1;
 
     std::vector<ChordVertex> sec, cho;
-    chord_build_sectors(CHORD_PALETTE_TMP, sec);
-    chord_build_static_chords(cd, CHORD_PALETTE_TMP, cho);
-    std::printf("vertici settori: %zu (attesi %d)\n", sec.size(), 10 * 8 * 6);
-    std::printf("vertici corde:   %zu (100 transizioni x 6 = 600 se tutte presenti)\n", cho.size());
-    if (sec.size() != (size_t)(10 * 8 * 6)) return 1;
+    chord_build_sectors(CHORD_PALETTES[1], sec);
+    chord_build_static_chords(cd, CHORD_PALETTES[1], cho);
+    std::printf("vertici settori: %zu\n", sec.size());
+    std::printf("vertici corde statiche: %zu (curve)\n", cho.size());
+    if (sec.size() != (size_t)(10 * CHORD_SECSUB * 6)) return 1;
     if (cho.empty()) return 1;
-    std::printf("chord_test: OK\n");
+
+    // la mesh curva deve avere più vertici della vecchia retta (6 per corda)
+    if (cho.size() <= 100 * 6) return 1;
+
+    // ancoraggi: la distribuzione deve coprire l'arco del settore
+    float a_first[2], a_last[2];
+    chord_anchor(0, 0, a_first);
+    chord_anchor(0, CHORD_SUBANCH - 1, a_last);
+    float ang_f = std::atan2(a_first[1], a_first[0]);
+    float ang_l = std::atan2(a_last[1], a_last[0]);
+    float dang = std::fabs(ang_f - ang_l);
+    if (dang < 0.05f) {   // ~2.9° minimo: gli ancoraggi devono coprire ~30°
+        std::fprintf(stderr, "FALLITO: ancoraggi non distribuiti (%.4f rad)\n", dang);
+        return 1;
+    }
+    std::printf("chord_test: OK (mesh curve + ancoraggi distribuiti)\n");
     return 0;
 }
 #endif
