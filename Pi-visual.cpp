@@ -33,6 +33,7 @@
 
 #include "visual/camera.h"
 #include "visual/chord.h"
+#include "visual/pendulum.h"
 #include "visual/pi_reader.h"
 
 static const int WIN_W = 1600;
@@ -227,33 +228,23 @@ int main(int argc, char* argv[]) {
     chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
     chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
-    // ---- triangolo di prova per la camera (STEP 4: verifica visiva) ----
-    GLuint tri_vao = 0, tri_vbo = 0;
-    {
-        const float verts[] = {
-            // x      y      r     g     b     a
-            -0.6f, -0.5f,  1.0f, 0.3f, 0.3f, 1.0f,
-             0.6f, -0.5f,  0.3f, 1.0f, 0.4f, 1.0f,
-             0.0f,  0.7f,  0.4f, 0.5f, 1.0f, 1.0f,
-        };
-        glGenVertexArrays(1, &tri_vao);
-        glBindVertexArray(tri_vao);
-        glGenBuffers(1, &tri_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, tri_vbo);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
-        glBindVertexArray(0);
-    }
-
-    // Camera a keyframe di prova: orbita x e dolly-in in 12 secondi.
-    const Keyframe demo_kf[] = {
-        {0.0,  -1.0f, 0.0f, 1.0f},
-        {12.0,  1.0f, 0.0f, 2.0f},
-    };
-    const int demo_nkf = 2;
+    // ---- pendolo: polilinea statica θ ∈ [0, 100] (STEP 7) ----
+    std::vector<PendulumVertex> pend_strip;
+    pendulum_build_strip(100.0, 0.02, pend_strip);
+    GLuint pend_vao = 0, pend_vbo = 0;
+    glGenVertexArrays(1, &pend_vao);
+    glBindVertexArray(pend_vao);
+    glGenBuffers(1, &pend_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, pend_vbo);
+    glBufferData(GL_ARRAY_BUFFER, pend_strip.size() * sizeof(PendulumVertex),
+                 pend_strip.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex), (void*)(2 * sizeof(float)));
+    glBindVertexArray(0);
+    const GLsizei pend_count = (GLsizei)pend_strip.size();
+    pend_strip.clear(); pend_strip.shrink_to_fit();
 
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 t_start = SDL_GetPerformanceCounter();
@@ -275,31 +266,20 @@ int main(int argc, char* argv[]) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        // ---- viewport sinistro: triangolo rotante con camera a keyframe ----
+        // ---- viewport sinistro: pendolo statico Z(θ), θ ∈ [0, 100] (STEP 7) ----
         glViewport(0, 0, half, h);
         glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-
         {
-            Keyframe k = keyframe_eval(demo_kf, demo_nkf, t);
-            mat4 P, V, VP;
-            mat4_perspective(P, 50.0f * 3.14159265f / 180.0f, (float)half / (float)h, 0.1f, 100.0f);
-            mat4_lookat(V, {k.x, k.y, 5.0f / k.zoom}, {k.x, k.y, 0.0f}, {0, 1, 0});
-            mat4_mul(VP, P, V);
-
-            float ang = (float)t * 0.8f;
-            float ca = std::cos(ang), sa = std::sin(ang);
-            mat4 M;
-            mat4_identity(M);
-            M[0] = ca; M[1] = sa;      // rotazione attorno a Z (column-major)
-            M[4] = -sa; M[5] = ca;
-            mat4 MVP;
-            mat4_mul(MVP, VP, M);
-
+            // camera fissa che inquadra tutta la curva (max |Z| ≈ 2)
+            float aspect = (float)half / (float)h;
+            mat4 O;
+            mat4_ortho(O, -2.4f * aspect, 2.4f * aspect, -2.4f, 2.4f, -1.0f, 1.0f);
             glUseProgram(flat.prog);
-            glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, MVP);
-            glBindVertexArray(tri_vao);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, O);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(pend_vao);
+            glDrawArrays(GL_LINE_STRIP, 0, pend_count);
             glBindVertexArray(0);
             glUseProgram(0);
         }
@@ -355,8 +335,8 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(win);
     }
 
-    glDeleteBuffers(1, &tri_vbo);
-    glDeleteVertexArrays(1, &tri_vao);
+    glDeleteBuffers(1, &pend_vbo);
+    glDeleteVertexArrays(1, &pend_vao);
     glDeleteBuffers(1, &sec_vbo);
     glDeleteVertexArrays(1, &sec_vao);
     glDeleteBuffers(1, &chd_vbo);
