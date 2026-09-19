@@ -1,15 +1,20 @@
 // ============================================================
 // chord.h — chord diagram delle cifre di π
 //
-// 10 settori (uno per cifra 0–9) disposti in cerchio dal PUBBLICO in senso
-// orario partendo dall'alto; ogni coppia di cifre consecutive (d[k], d[k+1])
-// è una corda tra il settore di d[k] e quello di d[k+1].
+// 10 settori (uno per cifra 0–9) disposti in cerchio in senso orario partendo
+// dall'alto; ogni coppia di cifre consecutive (d[k], d[k+1]) è una corda tra
+// il settore di d[k] e quello di d[k+1].
 //
 // La geometria è pre-costruita come mesh di triangoli (su macOS GL 3.3 core
 // glLineWidth è limitato a 1, quindi lo spessore delle corde viene dalla
 // geometria: quad per corda con larghezza proporzionale a sqrt(conteggio)).
 // Il colore della corda è quello della cifra di partenza; l'alpha cresce con
 // il conteggio normalizzato (usato con blending additivo).
+//
+// Streaming (STEP 6): rolling window circolare delle ultime N corde; ogni
+// corda memorizza il tempo di emissione e ogni frame l'alpha di fade viene
+// ricalcolata sulla CPU (degrada verso il nero in FADE_S secondi; con il
+// blending additivo rgb·alpha → 0 significa davvero spegnersi).
 //
 // Self-test temporaneo (non è un binario ufficiale):
 //   clang++ -x c++ -std=c++17 -DCHORD_TEST visual/chord.h -o chord_test \
@@ -20,6 +25,8 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+
+#include <OpenGL/gl3.h>
 
 #include "pi_reader.h"
 
@@ -148,6 +155,117 @@ static inline void chord_build_static_chords(const ChordData& cd,
     }
 }
 
+// Raggio delle corde statiche e in streaming: coincide con il bordo interno
+// dei settori (0.92), così le corde "arrivano" all'anello.
+static const float CHORD_RADIUS = 0.92f;
+
+// ------------------------- streaming con rolling window -------------------------
+// Finestra circolare delle ultime N corde; ogni corda memorizza il tempo di
+// emissione in times[] e ogni frame l'alpha di fade viene ricalcolata sulla
+// CPU per tutti i vertici (N è piccola: 5000 corde = 30000 vertici).
+// L'upload avviene una sola volta per frame con orphaning del buffer.
+struct ChordStream {
+    static constexpr int    N      = 5000;   // dimensione della rolling window
+    static constexpr double FADE_S = 8.0;    // durata del fade verso il nero
+    static constexpr int    VPC    = 6;      // vertici per corda (2 triangoli)
+
+    std::vector<ChordVertex> vtx;            // N*VPC vertici (copia CPU)
+    std::vector<float>       times;          // N tempi di emissione
+    size_t    head = 0;                      // prossima corda da sovrascrivere
+    long long emitted = 0;                   // corde emesse dall'inizio
+    long long base_index = 0;                // prossima cifra da leggere (d[base_index])
+    double    frac_acc = 0.0;                // accumulo frazionario (rate·dt)
+    GLuint    vao = 0, vbo = 0;
+
+    bool init_gl() {
+        vtx.assign((size_t)N * VPC, {0, 0, 0, 0, 0, 0});
+        times.assign((size_t)N, -1e30f);     // "mai emessa": fade già esaurito
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vtx.size() * sizeof(ChordVertex),
+                     vtx.data(), GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(ChordVertex), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(ChordVertex),
+                              (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+        return vbo != 0;
+    }
+
+    void destroy_gl() {
+        if (vbo) glDeleteBuffers(1, &vbo);
+        if (vao) glDeleteVertexArrays(1, &vao);
+        vao = vbo = 0;
+    }
+
+    // Reset completo (tasto R): torna all'inizio del file e svuota la finestra.
+    void reset() {
+        head = 0; emitted = 0; base_index = 0; frac_acc = 0.0;
+        for (auto& v : vtx) v = {0, 0, 0, 0, 0, 0};
+        for (auto& tm : times) tm = -1e30f;
+    }
+
+    // Legge le prossime n transizioni dal file π e le aggiunge alla finestra.
+    // Non tocca GL: l'upload avviene in render() (una sola chiamata a frame).
+    void push(double t, const PiReader& r, const float anchors[10][2],
+              const float palette[10][3], long long n) {
+        const size_t max_digits = r.decimal_digits();
+        for (long long k = 0; k < n; ++k) {
+            size_t i = (size_t)base_index;   // cifra d[i]
+            size_t j = i + 1;                // cifra d[i+1]
+            if (j >= max_digits) return;     // file finito: resta stabilizzato
+            int a = r.digit(i), b = r.digit(j);
+            base_index++;
+            add_chord(t, anchors[a], anchors[b], palette[a]);
+        }
+    }
+
+    void add_chord(double t, const float p0[2], const float p1[2], const float col[3]) {
+        float dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-9f) return;             // transizione d->d: corda degenerata
+        const float w = 0.004f;
+        float nx = -dy / len * w, ny = dx / len * w;
+        ChordVertex* q = &vtx[head * VPC];
+        q[0] = {p0[0] + nx, p0[1] + ny, col[0], col[1], col[2], 1.0f};
+        q[1] = {p0[0] - nx, p0[1] - ny, col[0], col[1], col[2], 1.0f};
+        q[2] = {p1[0] + nx, p1[1] + ny, col[0], col[1], col[2], 1.0f};
+        q[3] = q[1];
+        q[4] = q[2];
+        q[5] = {p1[0] - nx, p1[1] - ny, col[0], col[1], col[2], 1.0f};
+        times[head] = (float)t;
+        head = (head + 1) % (size_t)N;
+        emitted++;
+    }
+
+    // Ricalcola l'alpha di fade e ridisegna la finestra. Richiede che il
+    // chiamante abbia già: glUseProgram(flat.prog), u_alpha=1, blending additivo.
+    void render(double t_now, GLint u_mvp_loc, const mat4 mvp) {
+        if (emitted == 0) return;
+        const float inv_fade = (float)(1.0 / FADE_S);
+        for (size_t c = 0; c < (size_t)N; ++c) {
+            float age = (float)t_now - times[c];
+            float f = 1.0f - age * inv_fade;
+            if (f < 0.0f) f = 0.0f; else if (f > 1.0f) f = 1.0f;
+            f = f * f;                       // fade quadratico, più morbido
+            ChordVertex* q = &vtx[c * VPC];
+            q[0].a = f; q[1].a = f; q[2].a = f; q[3].a = f; q[4].a = f; q[5].a = f;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vtx.size() * sizeof(ChordVertex),
+                     nullptr, GL_DYNAMIC_DRAW);            // orphaning
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        vtx.size() * sizeof(ChordVertex), vtx.data());
+        glUniformMatrix4fv(u_mvp_loc, 1, GL_FALSE, mvp);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, N * VPC);
+        glBindVertexArray(0);
+    }
+};
+
 #ifdef CHORD_TEST
 #include <cstdlib>
 // Self-test: bilanciamento delle cifre + costruzione mesh.
@@ -167,7 +285,7 @@ int main(int argc, char* argv[]) {
     double ratio = (double)mx / (double)mn;
     std::printf("rapporto max/min frequenze: %.4f\n", ratio);
     if (ratio > 1.03) {
-        std::fprintf(stderr, "FALLITO: uno settore domina visivamente (ratio %.4f > 1.03)\n", ratio);
+        std::fprintf(stderr, "FALLITO: un settore domina visivamente (ratio %.4f > 1.03)\n", ratio);
         return 1;
     }
 

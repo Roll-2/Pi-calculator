@@ -96,19 +96,34 @@ static const char* FLAT_VS =
 static const char* FLAT_FS =
     "#version 330 core\n"
     "in vec4 v_col;\n"
+    "uniform float u_alpha;\n"
     "out vec4 frag;\n"
-    "void main() { frag = v_col; }\n";
+    "void main() { frag = vec4(v_col.rgb, v_col.a * u_alpha); }\n";
 
 struct FlatShader {
     GLuint prog = 0;
     GLint  u_mvp = -1;
+    GLint  u_alpha = -1;
     bool init() {
         prog = make_program(FLAT_VS, FLAT_FS);
         if (!prog) return false;
         u_mvp = glGetUniformLocation(prog, "u_mvp");
+        u_alpha = glGetUniformLocation(prog, "u_alpha");
         return true;
     }
 };
+
+// ------------------------- clock e rate condivisi (provisionali, si tarano allo STEP 9) -------------------------
+// rate(t) = corde/secondo per il chord stream; il pendolo usa θ̇ = K_θ · rate(t).
+// Esponenziale che satura a t≈120 s: l'integrale su [0,120] è ≈ 100M cifre
+// (il file di default), quindi l'animazione "significativa" dura ~2 minuti.
+static const double RATE_A   = 184.0;   // ampiezza iniziale (rate(0)=0, crescita lenta)
+static const double RATE_K   = 0.09;    // costante esponenziale
+static const double RATE_MAX = 9.0e6;   // saturazione (raggiunta a t≈120 s)
+static inline double rate_of(double t) {
+    double r = RATE_A * (std::exp(RATE_K * t) - 1.0);
+    return r < RATE_MAX ? r : RATE_MAX;
+}
 
 int main(int argc, char* argv[]) {
     const char* pi_path = "pi100m.txt";   // argomento --pi <file> per cambiarlo
@@ -192,6 +207,23 @@ int main(int argc, char* argv[]) {
     upload_mesh(chord_chd_v, &chd_vao, &chd_vbo);
     const GLsizei chord_sec_v_count = (GLsizei)chord_sec_v.size();
     const GLsizei chord_chd_v_count = (GLsizei)chord_chd_v.size();
+
+    // ---- streaming delle corde (STEP 6): rolling window con fade ----
+    // Ancoraggi precalcolati delle 10 cifre (evita trig per ogni corda emessa).
+    float anchors[10][2];
+    for (int d = 0; d < 10; ++d) {
+        float a = chord_digit_angle(d);
+        anchors[d][0] = CHORD_RADIUS * std::cos(a);
+        anchors[d][1] = CHORD_RADIUS * std::sin(a);
+    }
+    ChordStream stream;
+    if (!stream.init_gl()) {
+        std::fprintf(stderr, "Inizializzazione VBO streaming fallita\n");
+        SDL_GL_DeleteContext(gl);
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
     chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
     chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
@@ -272,6 +304,21 @@ int main(int argc, char* argv[]) {
             glUseProgram(0);
         }
 
+        // ---- chord streaming: quante corde emettere in questo frame ----
+        static double t_prev = 0.0;
+        double dt = t - t_prev;
+        if (dt < 0.0 || dt > 0.1) dt = 0.1;   // clamp (pausa/lag: nessun scatto)
+        t_prev = t;
+
+        // ---- chord streaming: quante corde emettere in questo frame ----
+        stream.frac_acc += rate_of(t) * dt;
+        long long to_emit = (long long)stream.frac_acc;
+        if (to_emit > 0) {
+            if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
+            stream.frac_acc -= (double)to_emit;
+            stream.push(t, pi_reader, anchors, CHORD_PALETTE_TMP, to_emit);
+        }
+
         // ---- viewport destro: chord diagram statico (STEP 5) ----
         glViewport(half, 0, w - half, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -286,13 +333,19 @@ int main(int argc, char* argv[]) {
 
             // settori: alpha blending standard
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glUniform1f(flat.u_alpha, 0.6f);
             glBindVertexArray(sec_vao);
             glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_sec_v_count);
 
-            // corde: blending additivo (richiesto dalla specifica)
+            // corde statiche: additivo, molto tenui (contesto per lo streaming)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glUniform1f(flat.u_alpha, 0.10f);
             glBindVertexArray(chd_vao);
             glDrawArrays(GL_TRIANGLES, 0, (GLint)chord_chd_v_count);
+
+            // corde in streaming: additivo, alpha per-vertex con fade temporale
+            glUniform1f(flat.u_alpha, 1.0f);
+            stream.render(t, flat.u_mvp, O);
 
             glBindVertexArray(0);
             glUseProgram(0);
@@ -308,6 +361,7 @@ int main(int argc, char* argv[]) {
     glDeleteVertexArrays(1, &sec_vao);
     glDeleteBuffers(1, &chd_vbo);
     glDeleteVertexArrays(1, &chd_vao);
+    stream.destroy_gl();
     glDeleteProgram(flat.prog);
     pi_reader.close();
     SDL_GL_DeleteContext(gl);
