@@ -184,6 +184,28 @@ conan.lock
 conanbuild.lock
 
 # ============================================================
+# Progetto pi_calc / Pi-visual
+# ============================================================
+
+# Binari dei nuovi progetti
+pi_calc
+Pi-visual
+
+# Output di pi_calc (pi_<N>.txt); pi300k.txt e pi100m.txt non matchano
+# (nessun underscore) e restano tracciati/gestiti come finora
+pi_*.txt
+
+# Oggetti del visualizzatore
+visual/*.o
+
+# Screenshot del visualizzatore
+pictures/
+
+# Il Makefile minimale di Pi-visual DEVE essere committato: la regola
+# generica "Makefile" sopra lo ignorerebbe
+!Makefile
+
+# ============================================================
 # NOTA: Per forzare l'aggiunta di un file ignorato, usa:
 #   git add -f nomefile
 # ============================================================
