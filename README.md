@@ -1,4 +1,4 @@
-# Chudnovsky π Calculator (`pi300k` · `pi100m`)
+# Chudnovsky π Calculator & Visualizer (`pi_calc` · `Pi-visual` · `pi300k` · `pi100m`)
 
 > 🌐 **Language / Lingua:** [🇬🇧 English](#english) · [🇮🇹 Italiano](#italiano)
 
@@ -12,11 +12,70 @@ arithmetic from **GMP/MPFR** (wrapped by **Boost.Multiprecision**):
 
 | Program | Digits | Result file |
 |---|---|---|
-| `pi300k.cpp` | 300,014 (standard) | `pi300k.txt` |
-| `pi100m.cpp` | up to 100,000,000+ (maximum) | `pi100m.txt` |
+| `pi_calc.cpp` | configurable via `-N` (default 314,159) | `pi_<N>.txt` |
+| `pi300k.cpp` | 300,014 (standard, reference) | `pi300k.txt` |
+| `pi100m.cpp` | up to 100,000,000+ (maximum, reference) | `pi100m.txt` |
 
 The names share a prefix so the files stay aligned in a terminal listing;
 `pi100m.txt` is git-ignored because it is ~100 MB.
+
+---
+
+## `pi_calc.cpp` — the unified calculator
+
+`pi_calc.cpp` is the current tool: it merges `pi300k.cpp` and `pi100m.cpp`
+into one program based entirely on the `pi100m.cpp` architecture (exact
+`mpz_class` binary splitting, dynamic-precision Newton sqrt, fast
+`mpz_get_str` conversion). The two older programs remain in the repository
+as reference.
+
+| Property | Value |
+|---|---|
+| Default | 314,159 digits, 4 threads |
+| Output | `pi_<N>.txt` (`"3."` + N digits, no trailing newline) |
+| Verification | first 1,000 digits against a hard-coded prefix (on by default) |
+| RAM control | hard barrier: no computation beyond the cap, no override flag |
+
+### Usage
+
+```bash
+# Build (macOS ARM, Homebrew)
+clang++ -std=c++17 -O2 pi_calc.cpp -o pi_calc \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
+
+./pi_calc                      # 314,159 digits, 4 threads -> pi_314159.txt
+./pi_calc -N 10000000 -t 8     # 10M digits, 8 threads
+./pi_calc -N 1000 --no-verify  # minimum size, skip the prefix check
+./pi_calc -h                   # usage
+```
+
+| Option | Meaning |
+|---|---|
+| `-N <digits>` | decimal places (default 314159, minimum 1000) |
+| `-t <threads>` | compute threads (default 4, at most `hardware_concurrency()`) |
+| `-o <file>` | output file (default `pi_<N>.txt`) |
+| `--no-verify` | skip the 1,000-digit prefix verification |
+| `-h`, `--help` | usage |
+
+### The RAM barrier
+
+The program never risks heavy swapping or OOM. Before any large allocation:
+
+- **peak estimate** = `N × 53` bytes — empirical formula measured on this
+  machine with the 20% margin included (10M digits → 0.53 GB estimated,
+  100M → 5.3 GB estimated vs 4.4 GB measured);
+- **cap** = `min(20 GB, system RAM − 4 GB)` — system RAM read from
+  `sysctl hw.memsize`;
+- estimate and cap are printed at startup (`stima picco: X.X GB /
+  disponibile: Y.Y GB`);
+- if the estimate exceeds the cap the program exits with a clear error
+  (digits requested, estimated peak, effective cap, detected system RAM,
+  suggestion to lower `-N`) **without computing anything**. There is
+  **no** `--force` / `--max-ram` flag: the barrier is hard by design.
+
+On the 24 GB machine the cap is 20 GB, which admits up to ≈ 345M digits
+(≈ 20–25 min of compute). If the 1,000-digit verification fails the program
+exits with an error and writes no file.
 
 ---
 
@@ -230,14 +289,65 @@ y-cruncher — but on a dedicated 2U server with 384 cores, 1.5 TB of RAM,
 
 ---
 
+## Pi-visual — the π visualizer
+
+`Pi-visual.cpp` (+ headers in `visual/`) is an SDL2 + OpenGL 3.3 core window
+split into two viewports, driven by one clock `t` and one monotonically
+increasing rate `rate(t)` (exponential saturating at t ≈ 120 s), so both
+panels accelerate together and the significant animation lasts ~2 minutes.
+Afterwards the app stays alive with the stabilized animation and the HUD.
+
+- **left — compound pendulum** `Z(θ) = e^(iθ) + e^(iπθ)`, with π hard-coded
+  to 17 decimals. The curve grows as digits are consumed; a hand-written
+  camera choreography dollies in exactly when θ crosses the two famous
+  near-closures of π: 14π (gap ≈ 0.056) and 226π (gap ≈ 0.0002, sub-pixel).
+- **right — chord diagram** of the digits of π read from `pi100m.txt` via
+  `mmap` (never copied into memory): 10 colored sectors (0–9), one chord per
+  consecutive digit pair, a rolling window of the last 5,000 chords with
+  fading alpha, additive blending. The 100M digits are streamed in ~120 s.
+
+### Build & run
+
+```bash
+make           # builds Pi-visual (see the Makefile or the header comment)
+./Pi-visual    # reads pi100m.txt in the current directory
+```
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `0`–`3` | palette: 0 provisional, 1 Botanica, 2 Alba, 3 Notturna |
+| `S` | PNG screenshot into `pictures/` (fallback: `$HOME`) |
+| `R` | reset the clock and restart from the beginning of the π file |
+| `F` | fullscreen on/off |
+| `Esc` | quit |
+
+### Options & limits
+
+- `--pi <file>` reads a different digits file (format: `3.` + digits, no
+  trailing newline — e.g. `pi300k.txt` or any `pi_<N>.txt` produced by
+  `pi_calc`). The file is verified against the known 100-digit prefix at
+  startup; on mismatch the program exits with an error.
+- Requires macOS ARM + Homebrew (`sdl2`, `sdl2_ttf`; zlib ships with the
+  OS), OpenGL 3.3 core, and the system font
+  `/System/Library/Fonts/Helvetica.ttc` (no external assets).
+- The mmap'd digits file does not count toward any RAM budget: resident
+  memory stays ~100 MB even with the 100M-digit file.
+
 ## Project layout
 
 ```
-pi100m.cpp        the maximum version: exact mpz tree, Newton sqrt, fast conversion
+pi_calc.cpp       the unified calculator: CLI, RAM barrier, built-in verification
+Pi-visual.cpp     the π visualizer: pendulum + chord diagram, two viewports
+visual/           its headers: pi_reader, chord, pendulum, hud, camera, screenshot
+Makefile          minimal build for Pi-visual (all / run / clean)
+memory.md         session log (environment, decisions, steps)
+pi100m.cpp        the maximum version (reference): exact mpz tree, Newton sqrt, fast conversion
 pi100m.txt        its output: "3." + 100,000,000 digits (git-ignored, ~100 MB)
-pi300k.cpp        the standard version (mpfr tree, 300,014 digits)
+pi300k.cpp        the standard version (reference, mpfr tree, 300,014 digits)
 pi300k.txt        its output: "3." + 300,014 decimal digits (300,016 bytes)
-.gitignore        ignores build artifacts, binaries and the huge pi100m.txt
+.gitignore        ignores build artifacts, binaries, pi_*.txt outputs and pictures/
 ```
 
 ## Notes & observations
@@ -262,11 +372,71 @@ arbitraria di **GMP/MPFR** (incapsulata da **Boost.Multiprecision**):
 
 | Programma | Cifre | File risultato |
 |---|---|---|
-| `pi300k.cpp` | 300.014 (standard) | `pi300k.txt` |
-| `pi100m.cpp` | fino a 100.000.000+ (massima) | `pi100m.txt` |
+| `pi_calc.cpp` | configurabile con `-N` (default 314.159) | `pi_<N>.txt` |
+| `pi300k.cpp` | 300.014 (standard, riferimento) | `pi300k.txt` |
+| `pi100m.cpp` | fino a 100.000.000+ (massima, riferimento) | `pi100m.txt` |
 
 I nomi condividono il prefisso così i file restano allineati nel terminale;
 `pi100m.txt` è git-ignorato perché pesa ~100 MB.
+
+---
+
+## `pi_calc.cpp` — il calcolatore unificato
+
+`pi_calc.cpp` è lo strumento attuale: unisce `pi300k.cpp` e `pi100m.cpp` in
+un solo programma basato integralmente sull'architettura di `pi100m.cpp`
+(binary splitting esatto su `mpz_class`, sqrt con Newton a precisione
+dinamica, conversione veloce con `mpz_get_str`). I due programmi più vecchi
+restano nel repository come riferimento.
+
+| Proprietà | Valore |
+|---|---|
+| Default | 314.159 cifre, 4 thread |
+| Output | `pi_<N>.txt` (`"3."` + N cifre, nessun newline finale) |
+| Verifica | prime 1.000 cifre contro un prefisso noto (attiva di default) |
+| Controllo RAM | barriera dura: nessun calcolo oltre il cap, nessun flag di override |
+
+### Uso
+
+```bash
+# Compilazione (macOS ARM, Homebrew)
+clang++ -std=c++17 -O2 pi_calc.cpp -o pi_calc \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpfr -lgmp
+
+./pi_calc                      # 314.159 cifre, 4 thread -> pi_314159.txt
+./pi_calc -N 10000000 -t 8     # 10M cifre, 8 thread
+./pi_calc -N 1000 --no-verify  # minimo, salta la verifica del prefisso
+./pi_calc -h                   # guida
+```
+
+| Opzione | Significato |
+|---|---|
+| `-N <cifre>` | decimali dopo la virgola (default 314159, minimo 1000) |
+| `-t <thread>` | thread di calcolo (default 4, al massimo `hardware_concurrency()`) |
+| `-o <file>` | file di output (default `pi_<N>.txt`) |
+| `--no-verify` | salta la verifica delle prime 1.000 cifre |
+| `-h`, `--help` | guida |
+
+### La barriera RAM
+
+Il programma non rischia mai swap pesante né OOM. Prima di ogni allocazione
+grande:
+
+- **stima picco** = `N × 53` byte — formula empirica misurata su questa
+  macchina con margine del 20% incluso (10M cifre → 0,53 GB stimati,
+  100M → 5,3 GB stimati contro 4,4 GB misurati);
+- **cap** = `min(20 GB, RAM sistema − 4 GB)` — RAM letta da
+  `sysctl hw.memsize`;
+- stima e cap sono stampati all'avvio (`stima picco: X,X GB /
+  disponibile: Y,Y GB`);
+- se la stima supera il cap il programma esce con un errore chiaro (cifre
+  richieste, picco stimato, cap effettivo, RAM rilevata, suggerimento di
+  ridurre `-N`) **senza calcolare nulla**. Non esiste **nessun** flag
+  `--force` / `--max-ram`: la barriera è dura per scelta.
+
+Sulla macchina da 24 GB il cap è 20 GB, che ammette fino a ≈ 345M cifre
+(≈ 20–25 min di calcolo). Se la verifica delle 1.000 cifre fallisce il
+programma esce con errore e non scrive alcun file.
 
 ---
 
@@ -484,14 +654,66 @@ Chudnovsky tramite y-cruncher — ma su un server 2U dedicato con 384 core,
 
 ---
 
+## Pi-visual — il visualizzatore di π
+
+`Pi-visual.cpp` (+ header in `visual/`) è una finestra SDL2 + OpenGL 3.3
+core divisa in due viewport, guidati da un solo clock `t` e da una sola
+rate `rate(t)` monotona crescente (esponenziale che satura a t ≈ 120 s),
+così i due pannelli accelerano insieme e l'animazione significativa dura
+~2 minuti. Poi il programma resta vivo con l'animazione stabilizzata e l'HUD.
+
+- **sinistro — pendolo composto** `Z(θ) = e^(iθ) + e^(iπθ)`, con π hardcoded
+  a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
+  camera scritta a mano fa il dolly-in esattamente quando θ attraversa le
+  due famose quasi-chiusure di π: 14π (gap ≈ 0,056) e 226π (gap ≈ 0,0002,
+  sottopixel).
+- **destro — chord diagram** delle cifre di π lette da `pi100m.txt` via
+  `mmap` (mai copiate in memoria): 10 settori colorati (0–9), una corda per
+  coppia di cifre consecutive, rolling window delle ultime 5.000 corde con
+  alpha decrescente, blending additivo. Le 100M cifre scorrono in ~120 s.
+
+### Compilazione ed esecuzione
+
+```bash
+make           # compila Pi-visual (vedi il Makefile o il commento in testa)
+./Pi-visual    # legge pi100m.txt nella directory corrente
+```
+
+### Tasti
+
+| Tasto | Azione |
+|---|---|
+| `0`–`3` | palette: 0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna |
+| `S` | screenshot PNG in `pictures/` (fallback: `$HOME`) |
+| `R` | reset del clock e riavvio dall'inizio del file π |
+| `F` | fullscreen on/off |
+| `Esc` | esci |
+
+### Opzioni e limiti
+
+- `--pi <file>` legge un file di cifre diverso (formato: `3.` + cifre, senza
+  newline finale — es. `pi300k.txt` o qualsiasi `pi_<N>.txt` prodotto da
+  `pi_calc`). Il file viene verificato contro il prefisso noto di 100 cifre
+  all'avvio; in caso di discordanza il programma esce con errore.
+- Richiede macOS ARM + Homebrew (`sdl2`, `sdl2_ttf`; zlib è di sistema),
+  OpenGL 3.3 core e il font di sistema
+  `/System/Library/Fonts/Helvetica.ttc` (nessun asset esterno).
+- Il file mmap di cifre non pesa su nessun budget RAM: la memoria residente
+  resta ~100 MB anche con il file da 100M cifre.
+
 ## Struttura del progetto
 
 ```
-pi100m.cpp        la versione massima: albero mpz esatto, Newton, conversione veloce
+pi_calc.cpp       il calcolatore unificato: CLI, barriera RAM, verifica integrata
+Pi-visual.cpp     il visualizzatore di π: pendolo + chord diagram, due viewport
+visual/           i suoi header: pi_reader, chord, pendulum, hud, camera, screenshot
+Makefile          build minimale per Pi-visual (all / run / clean)
+memory.md         diario di sessione (ambiente, decisioni, step)
+pi100m.cpp        la versione massima (riferimento): albero mpz esatto, Newton, conversione veloce
 pi100m.txt        il suo output: "3." + 100.000.000 cifre (git-ignorato, ~100 MB)
-pi300k.cpp        la versione standard (albero mpfr, 300.014 cifre)
+pi300k.cpp        la versione standard (riferimento, albero mpfr, 300.014 cifre)
 pi300k.txt        il suo output: "3." + 300.014 cifre decimali (300.016 byte)
-.gitignore        ignora artefatti di build, binari e il grande pi100m.txt
+.gitignore        ignora artefatti di build, binari, output pi_*.txt e pictures/
 ```
 
 ## Note e osservazioni

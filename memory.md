@@ -49,9 +49,13 @@ Aggiornato a ogni STEP, non a fine sessione.
 
 - [x] STEP 12 — QoL committato: visual/screenshot.h (glReadPixels→flip→Paeth→zlib→PNG con CRC32), tasti S (screenshot in pictures/, fallback $HOME), R (reset clock+stream), F (fullscreen). Writer PNG verificato con test GL offscreen (file: PNG image data 100x80 RGB). Smoke test app OK.
 
+- [x] STEP 13 — Performance committato (7f0f229): sample 3 s + ps: processo vsync-bound (SDL_CondWait su swap), CPU 7–14% di un core su 12, molto sotto il target di 2 core. Nessun collo di bottiglia: nessuna modifica al codice.
+- [x] STEP 14 — Documentazione: README aggiornato in EN+IT con sezioni "pi_calc — the unified calculator" (CLI, barriera RAM) e "Pi-visual — the π visualizer" (pannelli, tasti, --pi, limiti), tabelle e struttura progetto aggiornate. .gitignore già completo dai tempi di STEP 1 (pi_calc, Pi-visual, pi_*.txt, visual/*.o, pictures/, !Makefile). memory.md mantenuto passo per passo.
+
 ## Prossimi passi
 
-- STEP 13: profilazione FPS/CPU, target 60 fps stabili, ottimizzare il chord streaming se necessario.
+- STEP 15: verifica finale end-to-end (pi_calc default + rifiuto RAM, run Pi-visual ~2 min, controlli wc/head, git log).
+- Estensioni opzionali proposte (da NON implementare senza richiesta): audio sonificato dal pendolo, esportazione PNG del chord diagram, rate configurabile da CLI.
 
 ## Decisioni (aggiunta STEP 8)
 
