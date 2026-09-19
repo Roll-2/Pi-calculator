@@ -26,6 +26,7 @@
 #include <SDL.h>
 #include <OpenGL/gl3.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +34,7 @@
 
 #include "visual/camera.h"
 #include "visual/chord.h"
+#include "visual/hud.h"
 #include "visual/pendulum.h"
 #include "visual/pi_reader.h"
 
@@ -123,6 +125,18 @@ struct FlatShader {
 static const double RATE_A   = 184.0;   // ampiezza iniziale (rate(0)=0, crescita lenta)
 static const double RATE_K   = 0.09;    // costante esponenziale
 static const double RATE_MAX = 9.0e6;   // saturazione (raggiunta a t≈120 s)
+// Formattazione con separatori delle migliaia (it-IT: 1234567 -> "1.234.567")
+static std::string fmt_group(long long v) {
+    std::string s = std::to_string(v), out;
+    int c = 0;
+    for (int i = (int)s.size() - 1; i >= 0; --i) {
+        out += s[i];
+        if (++c % 3 == 0 && i > 0) out += '.';
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
 static inline double rate_of(double t) {
     double r = RATE_A * (std::exp(RATE_K * t) - 1.0);
     return r < RATE_MAX ? r : RATE_MAX;
@@ -238,6 +252,17 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+
+    // ---- HUD (STEP 10): SDL_ttf + cache di texture ----
+    HudText hud;
+    if (!hud.init(22, 16)) {
+        std::fprintf(stderr, "Inizializzazione HUD fallita\n");
+        stream.destroy_gl();
+        SDL_GL_DeleteContext(gl);
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
     chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
     chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
@@ -310,11 +335,30 @@ int main(int argc, char* argv[]) {
             glUseProgram(0);
         }
 
-        // ---- chord streaming: quante corde emettere in questo frame ----
         static double t_prev = 0.0;
-        double dt = t - t_prev;
-        if (dt < 0.0 || dt > 0.1) dt = 0.1;   // clamp (pausa/lag: nessun scatto)
+        double dt_raw = t - t_prev;
+        double dt = dt_raw;
+        if (dt < 0.0 || dt > 0.1) dt = 0.1;   // clamp (pausa/lag: nessuno scatto)
         t_prev = t;
+
+        // ---- fps (EMA) e righe HUD aggiornate a 10 Hz ----
+        static double fps_ema = 60.0;
+        if (dt_raw > 1e-4) fps_ema = 0.9 * fps_ema + 0.1 * (1.0 / dt_raw);
+        static std::string hud_digits, hud_time, hud_rate, hud_fps;
+        static double hud_accum = 1.0;   // primo frame: aggiorna subito
+        hud_accum += dt_raw;
+        if (hud_accum >= 0.1) {
+            hud_accum = 0.0;
+            hud_digits = "cifre consumate: " + fmt_group(stream.base_index) + " / " +
+                         fmt_group((long long)total_digits);
+            char b[64];
+            std::snprintf(b, sizeof(b), "tempo: %.1f s", t);
+            hud_time = b;
+            std::snprintf(b, sizeof(b), "rate: %s cifre/s", fmt_group((long long)rate_of(t)).c_str());
+            hud_rate = b;
+            std::snprintf(b, sizeof(b), "fps: %.1f", fps_ema);
+            hud_fps = b;
+        }
 
         // ---- chord streaming: quante corde emettere in questo frame ----
         stream.frac_acc += rate_of(t) * dt;
@@ -358,6 +402,63 @@ int main(int argc, char* argv[]) {
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
 
+        // ---- HUD (STEP 10): pixel ortho sull'intera finestra ----
+        glViewport(0, 0, w, h);
+        {
+            mat4 H;
+            mat4_ortho(H, 0.0f, (float)w, 0.0f, (float)h, -1.0f, 1.0f);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            // titolo in alto a sinistra
+            glUseProgram(hud.prog);
+            glUniformMatrix4fv(hud.u_mvp, 1, GL_FALSE, H);
+            glUniform1f(hud.u_alpha, 1.0f);
+            hud.draw("Pi-visual — pendolo composto + chord diagram di π",
+                     16.0f, (float)h - 14.0f, 1, 1, 1, 0.95f);
+
+            // contatori in alto a destra, allineati a destra
+            const std::string* lines[4] = {&hud_digits, &hud_time, &hud_rate, &hud_fps};
+            for (int i = 0; i < 4; ++i) {
+                float tw = hud.width(*lines[i]);
+                hud.draw(*lines[i], (float)w - 16.0f - tw, (float)h - 14.0f - i * hud.line_h,
+                         1, 1, 1, 0.9f);
+            }
+
+            // legenda delle 10 cifre in basso a sinistra: quad colorato + cifra
+            glUseProgram(flat.prog);
+            glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, H);
+            {
+                HudVertex sq[10 * 6];
+                for (int d = 0; d < 10; ++d) {
+                    float x = 16.0f, y = 16.0f + (9 - d) * 18.0f;
+                    const float* c = CHORD_PALETTE_TMP[d];
+                    sq[d * 6 + 0] = {x, y, c[0], c[1], c[2], 0.9f, 0, 0};
+                    sq[d * 6 + 1] = {x + 12, y, c[0], c[1], c[2], 0.9f, 0, 0};
+                    sq[d * 6 + 2] = {x + 12, y + 12, c[0], c[1], c[2], 0.9f, 0, 0};
+                    sq[d * 6 + 3] = {x, y, c[0], c[1], c[2], 0.9f, 0, 0};
+                    sq[d * 6 + 4] = {x + 12, y + 12, c[0], c[1], c[2], 0.9f, 0, 0};
+                    sq[d * 6 + 5] = {x, y + 12, c[0], c[1], c[2], 0.9f, 0, 0};
+                }
+                // il flat shader usa locations 0/1: la legenda riusa il VBO dell'HUD
+                glBindVertexArray(hud.vao);
+                glBindBuffer(GL_ARRAY_BUFFER, hud.vbo);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(sq), sq, GL_STREAM_DRAW);
+                glUniform1f(flat.u_alpha, 0.9f);
+                glDrawArrays(GL_TRIANGLES, 0, 60);
+                glBindVertexArray(0);
+            }
+            for (int d = 0; d < 10; ++d) {
+                const float* c = CHORD_PALETTE_TMP[d];
+                char lbl[2] = {(char)('0' + d), 0};
+                glUseProgram(hud.prog);
+                glUniformMatrix4fv(hud.u_mvp, 1, GL_FALSE, H);
+                hud.draw(lbl, 34.0f, 17.0f + (9 - d) * 18.0f + 12.0f,
+                         c[0], c[1], c[2], 0.95f, /*small=*/true);
+            }
+            glUseProgram(0);
+        }
+        hud.prune();
+
         SDL_GL_SwapWindow(win);
     }
 
@@ -367,6 +468,7 @@ int main(int argc, char* argv[]) {
     glDeleteBuffers(1, &chd_vbo);
     glDeleteVertexArrays(1, &chd_vao);
     stream.destroy_gl();
+    hud.destroy();
     glDeleteProgram(flat.prog);
     pi_reader.close();
     SDL_GL_DeleteContext(gl);
