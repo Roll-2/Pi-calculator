@@ -10,7 +10,9 @@
 // Un solo clock t e una sola rate(t) monotona crescente (esponenziale che
 // satura a t≈120 s) guidano entrambi i pannelli, così accelerano insieme.
 //
-// Tasti:  Esc  esci          (gli altri arrivano negli STEP successivi)
+// Tasti:  Esc   esci
+//         0-3   palette (0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna)
+//         (altri tasti negli STEP successivi)
 //
 // Compilazione (macOS ARM, Homebrew):
 //   make            (oppure il comando equivalente qui sotto)
@@ -215,8 +217,8 @@ int main(int argc, char* argv[]) {
     chord_data.accumulate(pi_reader, pi_reader.decimal_digits());
 
     std::vector<ChordVertex> chord_sec_v, chord_chd_v;
-    chord_build_sectors(CHORD_PALETTE_TMP, chord_sec_v);
-    chord_build_static_chords(chord_data, CHORD_PALETTE_TMP, chord_chd_v);
+    chord_build_sectors(CHORD_CURRENT_PALETTE, chord_sec_v);
+    chord_build_static_chords(chord_data, CHORD_CURRENT_PALETTE, chord_chd_v);
 
     GLuint sec_vao = 0, sec_vbo = 0, chd_vao = 0, chd_vbo = 0;
     auto upload_mesh = [](std::vector<ChordVertex>& v, GLuint* vao, GLuint* vbo) {
@@ -233,8 +235,24 @@ int main(int argc, char* argv[]) {
     };
     upload_mesh(chord_sec_v, &sec_vao, &sec_vbo);
     upload_mesh(chord_chd_v, &chd_vao, &chd_vbo);
-    const GLsizei chord_sec_v_count = (GLsizei)chord_sec_v.size();
-    const GLsizei chord_chd_v_count = (GLsizei)chord_chd_v.size();
+    GLsizei chord_sec_v_count = (GLsizei)chord_sec_v.size();
+    GLsizei chord_chd_v_count = (GLsizei)chord_chd_v.size();
+    chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
+    chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
+
+    // Ricostruzione delle mesh statiche con la palette corrente (tasti 0-3).
+    auto rebuild_static_meshes = [&]() {
+        std::vector<ChordVertex> sv, cv;
+        chord_build_sectors(CHORD_CURRENT_PALETTE, sv);
+        chord_build_static_chords(chord_data, CHORD_CURRENT_PALETTE, cv);
+        glBindBuffer(GL_ARRAY_BUFFER, sec_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sv.size() * sizeof(ChordVertex), sv.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, chd_vbo);
+        glBufferData(GL_ARRAY_BUFFER, cv.size() * sizeof(ChordVertex), cv.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        chord_sec_v_count = (GLsizei)sv.size();
+        chord_chd_v_count = (GLsizei)cv.size();
+    };
 
     // ---- streaming delle corde (STEP 6): rolling window con fade ----
     // Ancoraggi precalcolati delle 10 cifre (evita trig per ogni corda emessa).
@@ -263,8 +281,6 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
-    chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
-    chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
     // ---- pendolo animato (STEP 8): stream circolare + coreografia camera ----
     // La curva si completa quando sono state consumate tutte le cifre del file:
@@ -303,6 +319,20 @@ int main(int argc, char* argv[]) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) running = false;
             else if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = false;
+            else if (ev.type == SDL_KEYDOWN) {
+                int pk = -1;
+                switch (ev.key.keysym.sym) {
+                    case SDLK_0: pk = 0; break;
+                    case SDLK_1: pk = 1; break;
+                    case SDLK_2: pk = 2; break;
+                    case SDLK_3: pk = 3; break;
+                    default: break;
+                }
+                if (pk >= 0) {
+                    CHORD_CURRENT_PALETTE = CHORD_PALETTES[pk];
+                    rebuild_static_meshes();
+                }
+            }
         }
 
         double t = (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
@@ -366,7 +396,7 @@ int main(int argc, char* argv[]) {
         if (to_emit > 0) {
             if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
             stream.frac_acc -= (double)to_emit;
-            stream.push(t, pi_reader, anchors, CHORD_PALETTE_TMP, to_emit);
+            stream.push(t, pi_reader, anchors, CHORD_CURRENT_PALETTE, to_emit);
         }
 
         // ---- viewport destro: chord diagram statico (STEP 5) ----
@@ -431,7 +461,7 @@ int main(int argc, char* argv[]) {
                 HudVertex sq[10 * 6];
                 for (int d = 0; d < 10; ++d) {
                     float x = 16.0f, y = 16.0f + (9 - d) * 18.0f;
-                    const float* c = CHORD_PALETTE_TMP[d];
+                    const float* c = CHORD_CURRENT_PALETTE[d];
                     sq[d * 6 + 0] = {x, y, c[0], c[1], c[2], 0.9f, 0, 0};
                     sq[d * 6 + 1] = {x + 12, y, c[0], c[1], c[2], 0.9f, 0, 0};
                     sq[d * 6 + 2] = {x + 12, y + 12, c[0], c[1], c[2], 0.9f, 0, 0};
@@ -448,7 +478,7 @@ int main(int argc, char* argv[]) {
                 glBindVertexArray(0);
             }
             for (int d = 0; d < 10; ++d) {
-                const float* c = CHORD_PALETTE_TMP[d];
+                const float* c = CHORD_CURRENT_PALETTE[d];
                 char lbl[2] = {(char)('0' + d), 0};
                 glUseProgram(hud.prog);
                 glUniformMatrix4fv(hud.u_mvp, 1, GL_FALSE, H);

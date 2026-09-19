@@ -30,20 +30,64 @@
 
 #include "pi_reader.h"
 
-// Palette PROVVISORIA (viva, una tinta netta per cifra) — sostituita dagli
-// schemi pastello dello STEP 11.
-static const float CHORD_PALETTE_TMP[10][3] = {
-    {1.00f, 0.30f, 0.30f}, // 0 rosso
-    {1.00f, 0.60f, 0.20f}, // 1 arancio
-    {1.00f, 0.90f, 0.30f}, // 2 giallo
-    {0.40f, 1.00f, 0.40f}, // 3 verde
-    {0.30f, 0.90f, 0.90f}, // 4 ciano
-    {0.35f, 0.50f, 1.00f}, // 5 blu
-    {0.70f, 0.40f, 1.00f}, // 6 viola
-    {1.00f, 0.40f, 0.80f}, // 7 magenta
-    {0.90f, 0.90f, 0.90f}, // 8 bianco
-    {1.00f, 0.70f, 0.55f}, // 9 salmone
+// Palette (STEP 11): la 0 è la tinta vivace provvisoria, la 1-3 sono le
+// varianti pastello richieste (Botanica, Alba, Notturna). Una tinta per cifra.
+static const float CHORD_PALETTES[4][10][3] = {
+    { // 0: provvisoria (viva)
+        {1.00f, 0.30f, 0.30f}, // 0 rosso
+        {1.00f, 0.60f, 0.20f}, // 1 arancio
+        {1.00f, 0.90f, 0.30f}, // 2 giallo
+        {0.40f, 1.00f, 0.40f}, // 3 verde
+        {0.30f, 0.90f, 0.90f}, // 4 ciano
+        {0.35f, 0.50f, 1.00f}, // 5 blu
+        {0.70f, 0.40f, 1.00f}, // 6 viola
+        {1.00f, 0.40f, 0.80f}, // 7 magenta
+        {0.90f, 0.90f, 0.90f}, // 8 bianco
+        {1.00f, 0.70f, 0.55f}, // 9 salmone
+    },
+    { // 1: Botanica
+        {0.63f, 0.70f, 0.55f}, // 0 salvia
+        {0.80f, 0.62f, 0.31f}, // 1 ocra
+        {0.80f, 0.48f, 0.38f}, // 2 terracotta
+        {0.71f, 0.64f, 0.83f}, // 3 lavanda
+        {0.45f, 0.56f, 0.73f}, // 4 blu polvere
+        {0.87f, 0.66f, 0.68f}, // 5 rosa cipria
+        {0.94f, 0.76f, 0.64f}, // 6 pesca
+        {0.96f, 0.92f, 0.80f}, // 7 panna
+        {0.61f, 0.60f, 0.35f}, // 8 oliva
+        {0.70f, 0.36f, 0.25f}, // 9 ruggine
+    },
+    { // 2: Alba
+        {0.93f, 0.72f, 0.76f}, // 0 rosa tenue
+        {0.72f, 0.66f, 0.90f}, // 1 lavanda
+        {0.96f, 0.80f, 0.68f}, // 2 pesca
+        {0.91f, 0.60f, 0.58f}, // 3 corallo desaturato
+        {0.95f, 0.74f, 0.55f}, // 4 albicocca
+        {0.97f, 0.89f, 0.64f}, // 5 giallo burro
+        {0.65f, 0.85f, 0.72f}, // 6 verde menta
+        {0.63f, 0.79f, 0.91f}, // 7 azzurro cielo
+        {0.84f, 0.74f, 0.88f}, // 8 lilla
+        {0.97f, 0.94f, 0.86f}, // 9 crema
+    },
+    { // 3: Notturna
+        {0.42f, 0.53f, 0.70f}, // 0 blu polvere
+        {0.36f, 0.40f, 0.62f}, // 1 indaco desaturato
+        {0.78f, 0.80f, 0.83f}, // 2 argento
+        {0.72f, 0.73f, 0.76f}, // 3 grigio perla
+        {0.30f, 0.38f, 0.55f}, // 4 blu notte chiaro
+        {0.55f, 0.47f, 0.68f}, // 5 viola tenue
+        {0.52f, 0.70f, 0.75f}, // 6 ciano desaturato
+        {0.48f, 0.44f, 0.63f}, // 7 lavanda scura
+        {0.36f, 0.50f, 0.42f}, // 8 verde bosco tenue
+        {0.88f, 0.88f, 0.85f}, // 9 bianco sporco
+    },
 };
+static const char* CHORD_PALETTE_NAMES[4] = {"provvisoria", "Botanica", "Alba", "Notturna"};
+
+// Palette corrente (switchabile a runtime con i tasti 0–3): le mesh statiche
+// vengono ricostruite al cambio; le corde in streaming usano questa al momento
+// dell'emissione (le corde già emesse conservano il loro colore).
+static const float (*CHORD_CURRENT_PALETTE)[3] = CHORD_PALETTES[1];   // default: Botanica
 
 // Vertice condiviso con lo shader flat: pos.xy + rgba
 struct ChordVertex {
