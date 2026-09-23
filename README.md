@@ -298,15 +298,21 @@ panels accelerate together and the significant animation lasts ~2 minutes.
 Afterwards the app stays alive with the stabilized animation and the HUD.
 
 - **left — compound pendulum** `Z(θ) = e^(iθ) + e^(iπθ)`, with π hard-coded
-  to 17 decimals. The curve grows as digits are consumed; a hand-written
-  camera choreography dollies in exactly when θ crosses the two famous
-  near-closures of π: 14π (gap ≈ 0.056) and 226π (gap ≈ 0.0002, sub-pixel).
+  to 17 decimals. The camera works with **events**: at each of the two famous
+  near-closures of π — 14π (gap ≈ 0.056) and 226π (gap ≈ 0.0002, sub-pixel),
+  the only points where the curve returns to graze its birth point (2,0) —
+  the view dollies in and time **slows down** so the near-contact and the
+  colour change of the curve are clearly visible; outside the events, wide
+  view and full speed. The curve changes colour at every pass.
 - **right — chord diagram** of the digits of π read from `pi100m.txt` via
   `mmap` (never copied into memory): 10 colored sectors (0–9) with large
   digit labels around the ring, one **curved** chord (quadratic Bézier) per
-  consecutive digit pair with anchor points spread along each sector arc,
-  a rolling window of the last 5,000 chords with fading alpha, additive
-  blending. The 100M digits are streamed in ~120 s.
+  consecutive digit pair with anchor points spread along each sector arc.
+  The web **grows from zero**: the static matrix is fed by the live stream
+  and rebuilt every 512 chords; recent chords shine in the foreground
+  (quadratic 30 s fade, additive blending) then settle into the web. A
+  two-stage rate: slow linear ramp (60 digits/s) up to 100k digits, then
+  exponential acceleration to saturation.
 
 ### Build & run
 
@@ -671,15 +677,23 @@ così i due pannelli accelerano insieme e l'animazione significativa dura
 
 - **sinistro — pendolo composto** `Z(θ) = e^(iθ) + e^(iπθ)`, con π hardcoded
   a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
-  camera scritta a mano fa il dolly-in esattamente quando θ attraversa le
-  due famose quasi-chiusure di π: 14π (gap ≈ 0,056) e 226π (gap ≈ 0,0002,
-  sottopixel).
+  camera scritta a mano lavora a **eventi**: in corrispondenza delle due
+  famose quasi-chiusure di π — 14π (gap ≈ 0,056) e 226π (gap ≈ 0,0002,
+  sottopixel), gli unici punti in cui la curva torna a sfiorare il suo
+  punto di nascita (2,0) — la vista fa dolly-in e il tempo rallenta
+  (**slow motion**) per far vedere il quasi-contatto e il cambio colore
+  della curva; fuori dagli eventi, vista ampia e velocità piena. La curva
+  cambia colore a ogni svolta.
 - **destro — chord diagram** delle cifre di π lette da `pi100m.txt` via
   `mmap` (mai copiate in memoria): 10 settori colorati (0–9) con le cifre
   grandi attorno all'anello, una corda **curva** (Bézier quadratica) per
   ogni coppia di cifre consecutive con ancoraggi distribuiti lungo l'arco
-  di ogni settore, rolling window delle ultime 5.000 corde con alpha
-  decrescente, blending additivo. Le 100M cifre scorrono in ~120 s.
+  di ogni settore. La ragnatela **cresce da zero**: la matrice statica è
+  alimentata dallo streaming e ricontestualizzata ogni 512 corde; le corde
+  recenti brillano in primo piano (fade quadratico di 30 s, blending
+  additivo) poi si fondono nella ragnatela. Rate a due stadi: rampa
+  lineare lenta (60 cifre/s) fino a 100k cifre, poi accelerazione
+  esponenziale fino alla saturazione.
 
 ### Compilazione ed esecuzione
 

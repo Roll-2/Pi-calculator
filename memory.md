@@ -91,3 +91,19 @@ Richieste: corde curve morbide non rette, cifre leggibili, centratura, pendolo v
 ## Prossimi passi (rilavorazione grafica)
 
 - Verificare a schermo con l'utente le nuove velocità iniziali (rampa 60 cifre/s) e i due slow-motion cinematografici: se il primo slow a 14π tarda troppo col file lungo (t≈1665·fattore), abbassare soglia rampa 100k→30k cifre.
+
+## Terza passata (feedback utente: corde quasi invisibili, zoom bloccato, slow-motion mai vista)
+
+Causa scoperta: il workflow interrotto aveva lasciato su disco SOLO PARTE del lavoro — la "partenza lenta" descritta sopra non era mai stata scritta (restava la vecchia esponenziale RATE_A=8/K=0.115) e la coreografia era ancora la vecchia strisciata 1→14→1→190→1 sparsa su 188 rad. Tre i difetti percepiti:
+
+- **Corde "trasparenti/assenti"**: la ragnatela full-file disegnata fantomatica dall'avvio + fade di 6 s → il diagramma sembrava già pieno ma spento. RISOLTO con la ragnatela CRESCENTE: `chord_web` globale parte VUOTA, alimentata da `ChordStream::push` (update + flag web_dirty), layer statico ricontestualizzato ogni CHORD_REBUILD_EVERY=512 corde; fade 6→30 s; alpha streaming 0.55→0.75; statico 0.10/0.24→0.30/0.55. Rimossa l'infrastruttura a_sat (StreamVertex 8→7 float, attributo location 3 eliminato): la saturazione costante al 100% è ciò che l'utente voleva raggiungere subito dopo la partenza.
+- **Zoom "nel posto e momento sbagliati"**: la vecchia curva teneva zoom 14 per ~90 s con schermo quasi vuoto (i veri contatti a (2,0) sono solo 14π e 226π). RISOLTO: dolly-in = EVENTI LOCALI con bump smoothstep su ±DOLLY_W=3π attorno ai contatti: zoom = 1 + 13·b(14π) + 189·b(226π); fuori dagli eventi zoom 1.00 (misurato a 0π, 100π, 250π). Centro sempre verso (2,0) (k=zoom/14).
+- **Slow motion mai vista**: prima era distribuita/assorbita nella strisciata; ora è dentro lo stesso bump degli zoom: θ̇ = R·slow(θ), SLOW_R=0.12, misurato min 0.12 esattamente dentro i due eventi (probe /tmp/coreo_probe: 14π a 12,9 s, 226π a 161 s, fine curva 161 s con SCALE=0.1).
+- **rate_of a due stadi**: rampa LINEARE RATE_RAMP=60 cifre/s fino a RATE_RAMP_END=100k, poi esponenziale continua da lì (RATE_A=2, K=0.115, max 9e6). SCALE=0.1 in `#if 1` (tempi reali ~28 min di rampa; `#if 0` per la run reale). Il clock t della scena è moltiplicato per SCALE; HUD mostra rate_of(t)/SCALE (cifre/s reali).
+- **Pulizia**: chord_data (classificatore pre-accumulato) e max_transition era morti → rimossi; ChordData::reset→clear (ragnatela riparte vuota con R); th_0 e keyframe_eval non più usati.
+- **Verifica live** (PI_VISUAL_CHECK, t-scena 20 s = 200 s reali): centratura 0.998, 533 tinte nel disco (prima 26), pendolo θ=19.1π con 7485 punti, CPU 17-18%, log pulito.
+
+## Prossimi passi (terza passata)
+
+- L'utente deve valutare a schermo: velocità iniziale (600 cifre/s in test, 60 reali), i due eventi di dolly+slow a 14π (t≈129 s) e 226π (t≈1610 s) in test, la ragnatela crescente.
+- Per la run reale (rampa 28 min): mettere `#if 0` sul blocco SCALE.

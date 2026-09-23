@@ -15,9 +15,12 @@
 //     il punto di controllo è verso il centro (fattore BEZ_BOW), quindi le
 //     corde lunghe si curvano dolcemente dentro il cerchio;
 //   - lo spessore è in unità mondo (corde ~0.004): visibile ma sottile;
-//   - la SATURAZIONE delle corde cresce con la velocità: partenza desaturata,
-//     full color quando la matrice 10×10 è ~satura (niente bianco prematuro,
-//     il colore "si accende" man mano che lo streaming accelera);
+//   - le corde sono SEMPRE vive (saturazione piena, niente desaturazione
+//     iniziale né fade verso il bianco): la "ragnatela" si accende perché
+//     CRESCA nel numero di linee, non perché cambi tinta;
+//   - il layer statico NON è un'anteprima: la matrice 10×10 parte vuota e
+//     viene alimentata dallo streaming (ragnatela crescente), con rebuild
+//     periodico ogni CHORD_REBUILD_EVERY corde;
 //   - il fade temporale delle corde in streaming è calcolato NELLO SHADER
 //     (uniform u_now + tempo di emissione per corda): zero upload per frame
 //     anche con migliaia di corde;
@@ -119,10 +122,8 @@ static constexpr int   CHORD_SUBANCH  = 48;     // ancoraggi distribuiti per cif
 static constexpr int   CHORD_BEZ_SEG  = 32;     // segmenti per la Bézier (curve morbide)
 static constexpr int   CHORD_SECSUB   = 16;     // suddivisioni arco per settore
 static constexpr float CHORD_GAP_DEG  = 2.0f;   // gap tra settori (gradi)
-static constexpr float CHORD_FADE_S   = 6.0f;   // durata fade corde in streaming
-static constexpr double CHORD_SAT_MIN    = 0.10;  // saturazione iniziale delle corde
-static constexpr double CHORD_SAT_DIGITS = 1.0e5; // decollo: sotto questa soglia tutto desaturato
-static constexpr float  CHORD_STATIC_SAT = 0.55f; // saturazione del layer statico (contesto)
+static constexpr float CHORD_FADE_S   = 30.0f;  // durata fade corde in streaming
+static constexpr int   CHORD_REBUILD_EVERY = 512; // corde tra i rebuild della ragnatela
 
 static constexpr float CHORD_TWO_PI = 6.28318530717958647692f;
 static constexpr float CHORD_PI     = 3.14159265358979323846f;
@@ -154,18 +155,22 @@ struct ChordData {
     long long total = 0;   // cifre consumate
     long long emitted[10] = {};   // corde già emesse per cifra d'origine (round-robin)
 
+    // Aggiorna la matrice con una transizione (ragnatela crescente).
+    void update(int prev, int d) {
+        trans[prev][d]++;
+        freq[d]++;
+        total++;
+    }
+
     void accumulate(const PiReader& r, size_t max_digits) {
         size_t n = max_digits < r.decimal_digits() ? max_digits : r.decimal_digits();
         if (n == 0) return;
         int prev = r.digit(0);
-        freq[prev]++;
+        freq[prev]++; total++;
         for (size_t i = 1; i < n; ++i) {
-            int d = r.digit(i);
-            trans[prev][d]++;
-            freq[d]++;
-            prev = d;
+            update(prev, r.digit(i));
+            prev = r.digit(i);
         }
-        total = (long long)n;
     }
 
     long long max_transition() const {
@@ -176,15 +181,18 @@ struct ChordData {
         return mx;
     }
 
-    // Reaccumula dal file (reset del tasto R).
-    void reset(const PiReader& r) {
+    // Svuota la matrice (reset del tasto R: la ragnatela riparte da zero).
+    void clear() {
         for (int i = 0; i < 10; ++i)
             for (int j = 0; j < 10; ++j) trans[i][j] = 0;
         for (int d = 0; d < 10; ++d) freq[d] = 0;
         total = 0;
-        accumulate(r, r.decimal_digits());
     }
 };
+
+// Matrice della ragnatela crescente: parte VUOTA e viene alimentata dallo
+// streaming; il layer statico la visualizza (rebuild periodico nel main).
+static ChordData chord_web;
 
 // ---------------------------------------------------------------
 // Mesh dell'anello: 10 settori pastello con gap (triangolazioni d'arco)
@@ -277,12 +285,8 @@ static inline void chord_build_static_chords(const ChordData& cd,
             chord_anchor(j, (i * 13 + j * 7 + 5) % CHORD_SUBANCH, p1);
             float w = CHORD_WIDTH + (CHORD_WMAX - CHORD_WIDTH)
                       * std::sqrt((float)c / (float)cmax);
-            float alpha = 0.10f + 0.14f * ((float)c / (float)cmax);
-            // desaturato verso il nero: il layer statico non deve bruciare in bianco
-            float cs[3] = {palette[i][0] * CHORD_STATIC_SAT,
-                           palette[i][1] * CHORD_STATIC_SAT,
-                           palette[i][2] * CHORD_STATIC_SAT};
-            chord_push_curved(out, p0, p1, cs, alpha, w);
+            float alpha = 0.30f + 0.25f * ((float)c / (float)cmax);
+            chord_push_curved(out, p0, p1, palette[i], alpha, w);
         }
     }
 }
@@ -298,7 +302,6 @@ static const char* CHORD_STREAM_VS =
     "layout(location = 0) in vec2 a_pos;\n"
     "layout(location = 1) in vec4 a_col;\n"
     "layout(location = 2) in float a_birth;\n"
-    "layout(location = 3) in float a_sat;\n"
     "uniform mat4 u_mvp;\n"
     "uniform float u_now;\n"
     "out vec4 v_col;\n"
@@ -309,12 +312,12 @@ static const char* CHORD_STREAM_VS =
 static const char* CHORD_STREAM_VS2 =
     ");\n"
     "    f = clamp(f, 0.0, 1.0);\n"
-    "    v_col = vec4(a_col.rgb * a_sat, a_col.a * f * f);\n"   // fade quadratico + saturazione
+    "    v_col = vec4(a_col.rgb, a_col.a * f * f);\n"   // fade quadratico
     "}\n";
 
-// Vertice dello stream: pos + rgba + istante di emissione + saturazione (8 float).
+// Vertice dello stream: pos + rgba + istante di emissione (7 float).
 struct StreamVertex {
-    float x, y, r, g, b, a, birth, sat;
+    float x, y, r, g, b, a, birth;
 };
 
 struct ChordStream {
@@ -329,13 +332,14 @@ struct ChordStream {
     long long emitted = 0;
     long long base_index = 0;          // prossima cifra da leggere
     double    frac_acc = 0.0;
+    bool      web_dirty = false;       // ragnatela da ricontestualizzare
     int       dirty_start = 0, dirty_len = 0;   // range da ricaricare sul VBO
     GLuint    vao = 0, vbo = 0;
     GLuint    prog = 0;
     GLint     u_mvp = -1, u_now = -1;
 
     bool init_gl() {
-        vtx.assign((size_t)N * VPC, {0, 0, 0, 0, 0, 0, -1e30f, 0});
+        vtx.assign((size_t)N * VPC, {0, 0, 0, 0, 0, 0, -1e30f});
         birth.assign((size_t)N, -1e30f);
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
@@ -351,9 +355,6 @@ struct ChordStream {
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(StreamVertex),
                               (void*)(6 * sizeof(float)));
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(StreamVertex),
-                              (void*)(7 * sizeof(float)));
         glBindVertexArray(0);
 
         // programma con fade temporale (birth come attributo float)
@@ -409,8 +410,8 @@ struct ChordStream {
 
     void reset() {
         head = 0; emitted = 0; base_index = 0; frac_acc = 0.0;
-        dirty_start = dirty_len = 0;
-        for (auto& v : vtx) v = {0, 0, 0, 0, 0, 0, -1e30f, 0};
+        dirty_start = dirty_len = 0; web_dirty = false;
+        for (auto& v : vtx) v = {0, 0, 0, 0, 0, 0, -1e30f};
         for (auto& b : birth) b = -1e30f;
     }
 
@@ -419,11 +420,8 @@ struct ChordStream {
     // ultime `draw_budget` diventano corde disegnate: a rate satura (~9M/s)
     // generare tutto sarebbe spreco puro — la finestra rolling ne mostra
     // comunque solo N, e si rinnova con le più recenti.
-    void push(double t, const PiReader& r, const float palette[10][3],
-              long long n, long long draw_budget) {
+    void push(double t, const PiReader& r, long long n, long long draw_budget) {
         const size_t max_digits = r.decimal_digits();
-        // la matrice 10×10 è ~satura a ~86% del file: oltre, tutto full color
-        const double sat_cap = 0.86 * (double)max_digits;
         long long skip = n > draw_budget ? n - draw_budget : 0;
         base_index += (size_t)skip;
         const long long to_draw = n - skip;
@@ -433,18 +431,15 @@ struct ChordStream {
             if (j >= max_digits) return;     // file finito: resta stabilizzato
             int a = r.digit(i), b = r.digit(j);
             base_index++;
-            // saturazione crescente con le cifre consumate: 0.10 alla partenza,
-            // 1.0 quando la matrice è ~satura (dopo le ~86M cifre)
-            double x = ((double)base_index - CHORD_SAT_DIGITS) /
-                       (sat_cap - CHORD_SAT_DIGITS);
-            if (x < 0.0) x = 0.0;
-            if (x > 1.0) x = 1.0;
-            float sat = (float)(CHORD_SAT_MIN + (1.0 - CHORD_SAT_MIN) * x);
-            add_chord(t, a, b, palette[a], sat);
+            add_chord(t, a, b);
+            // ragnatela crescente: la corda entra anche nella matrice/layer
+            // statico, ricontestualizzato ogni CHORD_REBUILD_EVERY corde
+            chord_web.update(a, b);
+            if (emitted % CHORD_REBUILD_EVERY == 0) web_dirty = true;
         }
     }
 
-    void add_chord(double t, int da, int db, const float col[3], float sat) {
+    void add_chord(double t, int da, int db) {
         // ancoraggi DISTRIBUITI lungo l'arco: la k-esima corda che tocca una
         // cifra usa il k-esimo punto del settore (round-robin deterministico)
         float p0[2], p1[2];
@@ -452,7 +447,6 @@ struct ChordStream {
         chord_anchor(db, (int)((emitted * 7 + 3) % CHORD_SUBANCH), p1);
         // il colore è quello della cifra d'arrivo (stile degli esempi: il
         // "filo" entra nel settore del suo valore)
-        (void)col;
         const float* c = CHORD_CURRENT_PALETTE[db];
 
         const size_t base = head * VPC;
@@ -477,12 +471,12 @@ struct ChordStream {
             if (tl < 1e-9f) { tx = 1; ty = 0; tl = 1; }
             float nx = -ty / tl * CHORD_WIDTH, ny = tx / tl * CHORD_WIDTH;
             if (s > 0) {
-                q[out++] = {px + pnx, py + pny, c[0], c[1], c[2], 0.55f, b, sat};
-                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.55f, b, sat};
-                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.55f, b, sat};
-                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.55f, b, sat};
-                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.55f, b, sat};
-                q[out++] = {x - nx, y - ny, c[0], c[1], c[2], 0.55f, b, sat};
+                q[out++] = {px + pnx, py + pny, c[0], c[1], c[2], 0.75f, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.75f, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.75f, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.75f, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.75f, b};
+                q[out++] = {x - nx, y - ny, c[0], c[1], c[2], 0.75f, b};
             }
             px = x; py = y; pnx = nx; pny = ny;
         }

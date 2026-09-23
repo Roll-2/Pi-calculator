@@ -2,18 +2,20 @@
 // Pi-visual.cpp — visualizzatore π a due viewport (SDL2 + OpenGL 3.3 core)
 //
 // Finestra unica 1600×900 divisa in due viewport:
-//   sinistro : pendolo composto Z(θ) = e^(iθ) + e^(iπθ) con camera a keyframe
-//   destro   : chord diagram delle cifre di π lette da pi100m.txt (mmap),
-//              10 settori, corde tra cifre consecutive, rolling window con
-//              fade, blending additivo
+//   sinistro : pendolo composto Z(θ) = e^(iθ) + e^(iπθ), camera a EVENTI:
+//              dolly-in + slow motion sui due quasi-contatti con (2,0)
+//              (14π e 226π), colore della curva che cambia a ogni svolta
+//   destro   : chord diagram a RAGNATELA CRESCENTE delle cifre di π lette
+//              da pi100m.txt (mmap): la matrice parte VUOTA e le corde
+//              curve (Bézier) si accumulano man mano; le recenti brillano
+//              in primo piano con fade, poi restano nella ragnatela
 //
-// Un solo clock t e una sola rate(t) guidano entrambi i pannelli:
-// partenza molto lenta (poche decine di cifre/s), poi accelerazione
-// esponenziale fino alla saturazione a t≈120 s (100M cifre).
-//
-// Slow motion della coreografia: ai passaggi ravvicinati del pendolo
-// (θ = 2πk, sfioramento di (2,0)) il clock rallenta fino al 15% per ~7 s
-// per far vedere il quasi-contatto e il cambio colore della curva.
+// Un solo clock t (comprimibile per i test con SCALE) guida entrambi:
+// il chord segue rate(t) — rampa LINEARE lenta (60 cifre/s) fino a 100k
+// cifre, poi accelerazione esponenziale fino alla saturazione — e il
+// pendolo integra θ̇ = R·slow(θ), con slow motion SOLO dentro le finestre
+// dei due dolly-in: sincronia garantita perché slow e zoom sono funzioni
+// pure di θ.
 //
 // Tasti:  Esc   esci
 //         0-3   palette (0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna)
@@ -133,19 +135,35 @@ struct FlatShader {
 };
 
 // ------------------------- clock e rate condivisi -------------------------
-// rate(t) = cifre/secondo per il chord stream. Curva: lentissima all'inizio
-// (le prime ~100k cifre impiegano ~35 s), poi accelerazione esponenziale;
-// il file da 100M si esaurisce a t≈120 s. Il pendolo ha la sua rampa lineare
-// su THETA_TIME (vedi sotto), rallentata dalla slow motion vicino ai keyframe.
+// UN SOLO orologio t guida entrambi i pannelli. Il chord segue rate(t):
+//   1. rampa LINEARE lenta (RATE_RAMP cifre/s) fino a RATE_RAMP_END cifre:
+//      la ragnatela si costruisce piano, corda per corda;
+//   2. poi decollo esponenziale fino a RATE_MAX: il file da 100M si esaurisce
+//      in ~2 minuti complessivi.
 //
-static const double RATE_A   = 8.0;     // ampiezza iniziale (rate(0)=0, partenza lenta)
-static const double RATE_K   = 0.115;   // costante esponenziale
-static const double RATE_MAX = 9.0e6;   // saturazione (raggiunta a t≈120 s)
-// SLOW_*: slow motion del pendolo (sui due zoom, non su tutte le 113 svolte):
-// θ̇ = THETA_RATE·slow(θ) con slow = SLOW_R ai centri dei bump (14π e 226π),
-// 1 fuori. SLOW_W è la semi-ampiezza in RADIANTI della finestra rallentata.
-static const double SLOW_W = 2.0 * PI_PEND;   // ±2π attorno ai passaggi
-static const double SLOW_R = 0.15;      // fattore minimo (1 = nessun rallentamento)
+// Il pendolo segue lo stesso clock: θ(t) integra THETA_RATE·slow(θ)·dt con
+// slow(θ) < 1 nelle finestre di slow motion (vedi loop). Più lento = mantiene
+// la sincronia con il cambio colore sul quasi-contatto (funzione di θ).
+//
+// Il fattore SCALE comprime il tempo per i test (SCALE=1: tempi reali).
+static const double RATE_RAMP     = 60.0;   // cifre/s della rampa iniziale
+static const double RATE_RAMP_END = 1.0e5;  // decollo dopo le 100.000 cifre
+static const double RATE_A        = 2.0;    // ampiezza della fase esponenziale
+static const double RATE_K        = 0.115;  // costante esponenziale (decollo)
+static const double RATE_MAX      = 9.0e6;  // saturazione (cifre/s)
+#if 1
+static const double SCALE = 0.1;    // TEST: tempi reali (rampa ~28 min) compressi 10x
+#else
+static const double SCALE = 1.0;    // tempi reali: rampa ~28 min, poi ~2 min al massimo
+#endif
+// Slow motion + dolly-in: EVENTI LOCALI attorno ai due quasi-contatti con
+// (2,0) — 14π (gap 22/7) e 226π (gap 355/113). DOLLY_W è la semi-ampiezza in
+// radianti dell'evento (zoom e rallentamento); fuori dall'evento, vista ampia
+// e velocità piena. Z1/Z2 sono i fattori di zoom dei due dolly.
+static const double DOLLY_W = 3.0 * PI_PEND;  // ±3π attorno al passaggio
+static const double SLOW_R  = 0.12;           // fattore minimo (1 = nessun rallentamento)
+static const double Z1      = 14.0;           // zoom sul primo quasi-contatto
+static const double Z2      = 190.0;          // zoom sul secondo
 //
 // Formattazione con separatori delle migliaia (it-IT: 1234567 -> "1.234.567")
 static std::string fmt_group(long long v) {
@@ -160,7 +178,11 @@ static std::string fmt_group(long long v) {
 }
 
 static inline double rate_of(double t) {
-    double r = RATE_A * (std::exp(RATE_K * t) - 1.0);
+    if (t < RATE_RAMP_END / RATE_RAMP)            // fase 1: rampa lineare lenta
+        return RATE_RAMP;
+    // fase 2: esponenziale agganciata in continuo al valore della rampa
+    double t2 = t - RATE_RAMP_END / RATE_RAMP;
+    double r = RATE_RAMP + RATE_A * (std::exp(RATE_K * t2) - 1.0);
     return r < RATE_MAX ? r : RATE_MAX;
 }
 
@@ -226,12 +248,13 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
-    ChordData chord_data;
-    chord_data.accumulate(pi_reader, pi_reader.decimal_digits());
+    // ragnatela crescente: la matrice statica parte VUOTA e si riempie con lo
+    // streaming (il diagramma cresce davanti all'utente, non è un'anteprima)
+    chord_web.clear();
 
     std::vector<ChordVertex> chord_sec_v, chord_chd_v;
     chord_build_sectors(CHORD_CURRENT_PALETTE, chord_sec_v);
-    chord_build_static_chords(chord_data, CHORD_CURRENT_PALETTE, chord_chd_v);
+    chord_build_static_chords(chord_web, CHORD_CURRENT_PALETTE, chord_chd_v);
 
     GLuint sec_vao = 0, sec_vbo = 0, chd_vao = 0, chd_vbo = 0;
     auto upload_mesh = [](std::vector<ChordVertex>& v, GLuint* vao, GLuint* vbo) {
@@ -253,11 +276,11 @@ int main(int argc, char* argv[]) {
     chord_sec_v.clear(); chord_sec_v.shrink_to_fit();
     chord_chd_v.clear(); chord_chd_v.shrink_to_fit();
 
-    // Ricostruzione delle mesh statiche con la palette corrente (tasti 0-3).
+    // Ricostruzione delle mesh statiche: palette (tasti 0-3) o nuova ragnatela.
     auto rebuild_static_meshes = [&]() {
         std::vector<ChordVertex> sv, cv;
         chord_build_sectors(CHORD_CURRENT_PALETTE, sv);
-        chord_build_static_chords(chord_data, CHORD_CURRENT_PALETTE, cv);
+        chord_build_static_chords(chord_web, CHORD_CURRENT_PALETTE, cv);
         glBindBuffer(GL_ARRAY_BUFFER, sec_vbo);
         glBufferData(GL_ARRAY_BUFFER, sv.size() * sizeof(ChordVertex), sv.data(), GL_STATIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, chd_vbo);
@@ -297,15 +320,12 @@ int main(int argc, char* argv[]) {
     const double THETA_RATE = THETA_MAX / THETA_TIME;  // rad/s senza slow motion
     const double total_digits = (double)pi_reader.decimal_digits();
     PendulumStream pend_stream;
-    pend_stream.init_gl(THETA_MAX);
-
-    // Coreografia in coordinate θ (indipendente dalla durata del file π):
-    // dolly-in quando θ attraversa i passaggi ravvicinati all'origine —
-    // lo zoom segue il PENDOLO, il rallentamento avviene al momento giusto.
-    //   th_0 =  8π: la spirale è cresciuta, la camera comincia a mirare a (2,0)
-    //   th_1 = 14π: quasi-chiusura 22/7, gap ≈ 0.056 → zoom 14 (1/6 vp)
+    pend_stream.init_gl(THETA_MAX);    // Coreografia in coordinate θ (indipendente dalla durata del file π):
+    // i dolly-in sono EVENTI LOCALI sui due passaggi ravvicinati all'origine —
+    //   th_1 =  14π: quasi-chiusura 22/7,   gap ≈ 0.056  → zoom 14
     //   th_2 = 226π: quasi-chiusura 355/113, gap ≈ 0.0002 → zoom 190
-    const double th_0 = 8.0 * PI_PEND,   th_1 = 14.0 * PI_PEND;
+    // Fuori dagli eventi: vista ampia e velocità piena.
+    const double th_1 = 14.0 * PI_PEND;
     const double th_2 = 226.0 * PI_PEND;
     // smoothstep su [0,1] (double, per le funzioni camera in θ)
     auto smooth_01 = [](double s) { return s * s * (3.0 - 2.0 * s); };
@@ -353,7 +373,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        double t = (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
+        // il clock del clock della scena (compressibile per i test via SCALE)
+        double t = SCALE * (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
 
         static double t_prev = 0.0;
         double dt_raw = t - t_prev;
@@ -383,30 +404,33 @@ int main(int argc, char* argv[]) {
             //    (bump sui due zoom, 14π e 226π), come la camera: sincronia
             //    garantita per costruzione — il quasi-contatto, il cambio
             //    colore e lo zoom profondo cadono sullo stesso istante
-            const double d1 = std::fabs(theta_cur - th_1) / SLOW_W;
-            const double d2 = std::fabs(theta_cur - th_2) / SLOW_W;
+            const double d1 = std::fabs(theta_cur - th_1) / DOLLY_W;
+            const double d2 = std::fabs(theta_cur - th_2) / DOLLY_W;
             double slow = 1.0;
             if (d1 < 1.0) slow -= (1.0 - SLOW_R) * (1.0 - smooth_01(d1));
             if (d2 < 1.0) slow -= (1.0 - SLOW_R) * (1.0 - smooth_01(d2)) * slow;
             theta_cur += THETA_RATE * dt * slow;   // dt già clampato sopra
             pend_stream.advance(theta_cur);
 
-            // 2) camera in θ, tre atti agganciati ai quasi-contatti con (2,0)
-            //    (che avvengono SOLO a 14π e 226π: sono i convergenti 22/7 e
-            //    355/113): dolly-in 1→14 sul primo, ritorno alla vista ampia
-            //    (la rosetta continua a crescere, colorata a ogni giro di 2π),
-            //    dolly finale 1→190 sull'arrivo a 226π. Il centro segue lo
-            //    zoom: vista ampia → origine, zoom → il punto di contatto.
-            const double zA = 1.0 + 13.0 * smooth_01(std::min(std::max((theta_cur - th_0) / (th_1 - th_0), 0.0), 1.0));
-            const double zB = 1.0 - (1.0 - 1.0 / 14.0) * smooth_01(std::min(std::max((theta_cur - th_1) / 30.0, 0.0), 1.0));
-            // zC: sale a 190 sull'arrivo (30 rad prima), rientra a 1 alla fine
-            // della finestra slow: la chiusura si vede da vicinissima, poi la
-            // vista si riapre sull'intera rosetta finita
-            const double rise = smooth_01(std::min(std::max((theta_cur - (th_2 - 30.0)) / 30.0, 0.0), 1.0));
-            const double fall = smooth_01(std::min(std::max((theta_cur - (th_2 + SLOW_W)) / 30.0, 0.0), 1.0));
-            const double zC = 1.0 + 189.0 * (rise - fall);
-            const double zoom = zA * zB * zC;
-            const double cx = 2.0 * std::min(std::max((zoom - 1.0) / 13.0, 0.0), 1.0);
+            // 2) camera in θ: i DUE DOLLY-INTO sono EVENTI LOCALI agganciati
+            //    ai due quasi-contatti con (2,0) — 14π (gap 22/7) e 226π (gap
+            //    355/113), gli UNICI punti in cui la curva torna a sfiorare
+            //    l'origine. Ogni dolly dura ±DOLLY_W attorno al passaggio:
+            //    zoom in → slow motion → zoom out; fuori dagli eventi, vista
+            //    ampia. Il centro segue lo zoom: sempre verso il punto di
+            //    contatto (2,0).
+            auto bump = [&](double th, double center) {
+                double s = 1.0 - std::fabs(th - center) / DOLLY_W;   // 1 al passaggio, 0 fuori
+                s = std::min(std::max(s, 0.0), 1.0);
+                return smooth_01(s);
+            };
+            const double b1 = bump(theta_cur, th_1);
+            const double b2 = bump(theta_cur, th_2);
+            const double zoom = 1.0
+                + (Z1 - 1.0) * b1
+                + (Z2 - 1.0) * b2;
+            const double k = std::min(std::max((zoom - 1.0) / (Z1 - 1.0), 0.0), 1.0);
+            const double cx = 2.0 * k;
             const float  half_ext = (float)(2.4 / zoom);
             const float  aspect = (float)half / (float)h;
             mat4 O;
@@ -432,16 +456,15 @@ int main(int argc, char* argv[]) {
             char b[64];
             std::snprintf(b, sizeof(b), "tempo: %.1f s", t);
             hud_time = b;
-            std::snprintf(b, sizeof(b), "rate: %s cifre/s", fmt_group((long long)rate_of(t)).c_str());
+            std::snprintf(b, sizeof(b), "rate: %s cifre/s", fmt_group((long long)rate_of(t) / SCALE).c_str());
             hud_rate = b;
             std::snprintf(b, sizeof(b), "fps: %.1f", fps_ema);
             hud_fps = b;
         }
 
         // ---- chord streaming: quante corde emettere in questo frame ----
-        // In streaming finché le cifre lette non raggiungono quelle
-        // accumulate nella matrice statica; poi il diagramma è completo e il
-        // layer statico basta (solo refresh dei colori al cambio palette).
+        // In streaming finché il file non è esaurito: le cifre vengono TUTTE
+        // consumate al ritmo di rate(t) (HUD onesto), con tetto per frame.
         const bool streaming = (long long)stream.base_index < (long long)total_digits;
         if (streaming) {
             stream.frac_acc += rate_of(t) * dt;
@@ -449,8 +472,14 @@ int main(int argc, char* argv[]) {
             if (to_emit > 0) {
                 if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
                 stream.frac_acc -= (double)to_emit;
-                stream.push(t, pi_reader, CHORD_CURRENT_PALETTE, to_emit, ChordStream::DRAW_BUDGET);
+                stream.push(t, pi_reader, to_emit, ChordStream::DRAW_BUDGET);
             }
+        }
+        // ragnatela crescente: ricontestualizza il layer statico quando lo
+        // streaming ne ha aggiunte abbastanza (e alla prima corda emessa)
+        if (stream.web_dirty) {
+            stream.web_dirty = false;
+            rebuild_static_meshes();
         }
 
         // ---- viewport destro: chord diagram (stile digit circle) ----
@@ -690,7 +719,8 @@ int main(int argc, char* argv[]) {
             theta_cur = 0.0;         // anche la coreografia riparte da θ = 0
             stream.reset();          // rolling window, base_index, accumulo frazionario
             pend_stream.reset();     // curva da θ=0
-            chord_data.reset(pi_reader);   // matrice: riaccumulata subito
+            chord_web.clear();       // ragnatela riparte da zero
+            rebuild_static_meshes();
         }
 
         // ---- screenshot (tasto S): cattura il back buffer PRIMA dello swap ----
