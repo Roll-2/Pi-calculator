@@ -7,8 +7,13 @@
 //              10 settori, corde tra cifre consecutive, rolling window con
 //              fade, blending additivo
 //
-// Un solo clock t e una sola rate(t) monotona crescente (esponenziale che
-// satura a t≈120 s) guidano entrambi i pannelli, così accelerano insieme.
+// Un solo clock t e una sola rate(t) guidano entrambi i pannelli:
+// partenza molto lenta (poche decine di cifre/s), poi accelerazione
+// esponenziale fino alla saturazione a t≈120 s (100M cifre).
+//
+// Slow motion della coreografia: ai passaggi ravvicinati del pendolo
+// (θ = 2πk, sfioramento di (2,0)) il clock rallenta fino al 15% per ~7 s
+// per far vedere il quasi-contatto e il cambio colore della curva.
 //
 // Tasti:  Esc   esci
 //         0-3   palette (0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna)
@@ -127,15 +132,21 @@ struct FlatShader {
     }
 };
 
-// ------------------------- clock e rate condivisi (tarati, STEP 9) -------------------------
-// rate(t) = corde/secondo per il chord stream; il pendolo usa θ̇ = K_θ · rate(t)
-// con K_θ = THETA_MAX / cifre_totali (stesso progresso, stesso clock).
-// Esponenziale che satura a t≈120 s. Verifica empirica con probe (integrazione
-// discreta a dt=1/60, clamp e cap identici al loop reale): il file da 100M
-// cifre si esaurisce a t=120,00 s — bersaglio dei ~2 minuti centrato.
-static const double RATE_A   = 184.0;   // ampiezza iniziale (rate(0)=0, crescita lenta)
-static const double RATE_K   = 0.09;    // costante esponenziale
+// ------------------------- clock e rate condivisi -------------------------
+// rate(t) = cifre/secondo per il chord stream. Curva: lentissima all'inizio
+// (le prime ~100k cifre impiegano ~35 s), poi accelerazione esponenziale;
+// il file da 100M si esaurisce a t≈120 s. Il pendolo ha la sua rampa lineare
+// su THETA_TIME (vedi sotto), rallentata dalla slow motion vicino ai keyframe.
+//
+static const double RATE_A   = 8.0;     // ampiezza iniziale (rate(0)=0, partenza lenta)
+static const double RATE_K   = 0.115;   // costante esponenziale
 static const double RATE_MAX = 9.0e6;   // saturazione (raggiunta a t≈120 s)
+// SLOW_*: slow motion del pendolo (sui due zoom, non su tutte le 113 svolte):
+// θ̇ = THETA_RATE·slow(θ) con slow = SLOW_R ai centri dei bump (14π e 226π),
+// 1 fuori. SLOW_W è la semi-ampiezza in RADIANTI della finestra rallentata.
+static const double SLOW_W = 2.0 * PI_PEND;   // ±2π attorno ai passaggi
+static const double SLOW_R = 0.15;      // fattore minimo (1 = nessun rallentamento)
+//
 // Formattazione con separatori delle migliaia (it-IT: 1234567 -> "1.234.567")
 static std::string fmt_group(long long v) {
     std::string s = std::to_string(v), out;
@@ -151,17 +162,6 @@ static std::string fmt_group(long long v) {
 static inline double rate_of(double t) {
     double r = RATE_A * (std::exp(RATE_K * t) - 1.0);
     return r < RATE_MAX ? r : RATE_MAX;
-}
-static const double RATE_T_SAT = 120.0;   // t oltre il quale rate è costante
-static double rate_integral_sat() {       // ∫rate su [0, T_SAT]
-    return RATE_A / RATE_K * (std::exp(RATE_K * RATE_T_SAT) - 1.0);
-}
-// Inversa dell'integrale: t tale che le cifre consumate siano `digits`
-// (prima della saturazione: t = ln(k·x/A + 1)/k; dopo: tratto lineare).
-static double rate_inverse(double digits) {
-    static const double r_sat = rate_integral_sat();
-    if (digits <= r_sat) return std::log(digits * RATE_K / RATE_A + 1.0) / RATE_K;
-    return RATE_T_SAT + (digits - r_sat) / RATE_MAX;
 }
 
 int main(int argc, char* argv[]) {
@@ -288,45 +288,31 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // ---- pendolo animato (STEP 8): stream circolare + coreografia camera ----
-    // La curva si completa quando sono state consumate tutte le cifre del file:
-    // θ_target = THETA_MAX · (cifre consumate / cifre totali).
-    const double THETA_MAX = 226.0 * PI_PEND;   // ≈ 710 rad (fine coreografia)
+    // ---- pendolo animato: stream circolare + coreografia in spazio-θ ----
+    // Il pendolo NON usa l'orologio delle cifre (per il primo minuto sarebbe
+    // fermo: il progresso esponenziale parte quasi piatto): cresce a THETA_RATE
+    // rad/s, modulata dalla slow motion (funzione di θ: vedi loop).
+    const double THETA_MAX  = 226.0 * PI_PEND;   // ≈ 710 rad (fine coreografia)
+    const double THETA_TIME = 150.0;             // tempo base della curva [s]
+    const double THETA_RATE = THETA_MAX / THETA_TIME;  // rad/s senza slow motion
     const double total_digits = (double)pi_reader.decimal_digits();
     PendulumStream pend_stream;
     pend_stream.init_gl(THETA_MAX);
-    // Il progresso reale (esponenziale) è quasi piatto per il primo minuto:
-    // il pendolo verrebbe disegnato a scatti. L'easing lo porta davanti con
-    // una rampa visibile, poi lo lascia raggiungere dal progresso reale
-    // (tutti i riaggiustamenti sono in avanti: la curva non retrocede mai).
-    auto pend_theta_target = [&](double t_now) {
-        double real = THETA_MAX * ((double)stream.base_index / total_digits);
-        double eased = (THETA_MAX / 45.0) * t_now;
-        return eased > real ? eased : real;
-    };
 
-    // Coreografia scritta in θ e convertita in tempo con l'inversa di rate(t),
-    // così i dolly-in cadono ESATTAMENTE quando θ attraversa i punti critici,
-    // qualunque sia la lunghezza del file π:
-    //   1. vista ampia finché θ < 14π (quasi-chiusura 22/7, gap ≈ 0.056)
-//   2. dolly-in a (2, 0) mentre θ attraversa 14π (zoom 14: il gap ≈ 0.056
-//      riempie ~1/6 dell'altezza del viewport → ben visibile)
-    //   3. si resta sul punto mentre la curva si addensa, finché θ → 226π
-    //   4. secondo dolly-in più profondo (zoom 190: gap ≈ 0.0002 → ~sottopixel)
-    const double th_1 = 14.0 * PI_PEND, th_2 = 226.0 * PI_PEND;
-    auto t_for_theta = [&](double th) { return rate_inverse(th / THETA_MAX * total_digits); };
-    const Keyframe pend_kf[] = {
-        {0.0,                        0.0f, 0.0f, 1.0f},
-        {t_for_theta(th_1),          0.0f, 0.0f, 1.0f},
-        {t_for_theta(th_1) + 2.5,    2.0f, 0.0f, 14.0f},
-        {t_for_theta(th_2) - 3.0,    2.0f, 0.0f, 14.0f},
-        {t_for_theta(th_2),          2.0f, 0.0f, 190.0f},
-        {t_for_theta(th_2) + 600.0,  2.0f, 0.0f, 190.0f},
-    };
-    const int pend_nkf = (int)(sizeof(pend_kf) / sizeof(pend_kf[0]));
+    // Coreografia in coordinate θ (indipendente dalla durata del file π):
+    // dolly-in quando θ attraversa i passaggi ravvicinati all'origine —
+    // lo zoom segue il PENDOLO, il rallentamento avviene al momento giusto.
+    //   th_0 =  8π: la spirale è cresciuta, la camera comincia a mirare a (2,0)
+    //   th_1 = 14π: quasi-chiusura 22/7, gap ≈ 0.056 → zoom 14 (1/6 vp)
+    //   th_2 = 226π: quasi-chiusura 355/113, gap ≈ 0.0002 → zoom 190
+    const double th_0 = 8.0 * PI_PEND,   th_1 = 14.0 * PI_PEND;
+    const double th_2 = 226.0 * PI_PEND;
+    // smoothstep su [0,1] (double, per le funzioni camera in θ)
+    auto smooth_01 = [](double s) { return s * s * (3.0 - 2.0 * s); };
 
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 t_start = SDL_GetPerformanceCounter();
+    double theta_cur = 0.0;     // θ corrente del pendolo (detta dal clock in θ)
 
     // Verifica geometrica automatica (PI_VISUAL_CHECK=1): a t=20 s misura nel
     // framebuffer centratura dell'anello, varietà di colore delle corde e
@@ -369,6 +355,12 @@ int main(int argc, char* argv[]) {
 
         double t = (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
 
+        static double t_prev = 0.0;
+        double dt_raw = t - t_prev;
+        double dt = dt_raw;
+        if (dt < 0.0 || dt > 0.1) dt = 0.1;   // clamp (pausa/lag: nessuno scatto)
+        t_prev = t;
+
         int w = 0, h = 0;
         SDL_GL_GetDrawableSize(win, &w, &h);
         int half = w / 2;
@@ -384,29 +376,48 @@ int main(int argc, char* argv[]) {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // ---- viewport sinistro: pendolo animato con keyframe (STEP 8) ----
+        // ---- viewport sinistro: pendolo con coreografia in spazio-θ ----
         glViewport(0, 0, half, h);
         {
-            pend_stream.advance(pend_theta_target(t));
+            // 1) θ̇ = THETA_RATE · slow(θ): la slow motion è FUNZIONE DI θ
+            //    (bump sui due zoom, 14π e 226π), come la camera: sincronia
+            //    garantita per costruzione — il quasi-contatto, il cambio
+            //    colore e lo zoom profondo cadono sullo stesso istante
+            const double d1 = std::fabs(theta_cur - th_1) / SLOW_W;
+            const double d2 = std::fabs(theta_cur - th_2) / SLOW_W;
+            double slow = 1.0;
+            if (d1 < 1.0) slow -= (1.0 - SLOW_R) * (1.0 - smooth_01(d1));
+            if (d2 < 1.0) slow -= (1.0 - SLOW_R) * (1.0 - smooth_01(d2)) * slow;
+            theta_cur += THETA_RATE * dt * slow;   // dt già clampato sopra
+            pend_stream.advance(theta_cur);
 
-            Keyframe k = keyframe_eval(pend_kf, pend_nkf, t);
-            float half_ext = 2.4f / k.zoom;   // zoom = dolly-in (camera frontale)
-            float aspect = (float)half / (float)h;
+            // 2) camera in θ, tre atti agganciati ai quasi-contatti con (2,0)
+            //    (che avvengono SOLO a 14π e 226π: sono i convergenti 22/7 e
+            //    355/113): dolly-in 1→14 sul primo, ritorno alla vista ampia
+            //    (la rosetta continua a crescere, colorata a ogni giro di 2π),
+            //    dolly finale 1→190 sull'arrivo a 226π. Il centro segue lo
+            //    zoom: vista ampia → origine, zoom → il punto di contatto.
+            const double zA = 1.0 + 13.0 * smooth_01(std::min(std::max((theta_cur - th_0) / (th_1 - th_0), 0.0), 1.0));
+            const double zB = 1.0 - (1.0 - 1.0 / 14.0) * smooth_01(std::min(std::max((theta_cur - th_1) / 30.0, 0.0), 1.0));
+            // zC: sale a 190 sull'arrivo (30 rad prima), rientra a 1 alla fine
+            // della finestra slow: la chiusura si vede da vicinissima, poi la
+            // vista si riapre sull'intera rosetta finita
+            const double rise = smooth_01(std::min(std::max((theta_cur - (th_2 - 30.0)) / 30.0, 0.0), 1.0));
+            const double fall = smooth_01(std::min(std::max((theta_cur - (th_2 + SLOW_W)) / 30.0, 0.0), 1.0));
+            const double zC = 1.0 + 189.0 * (rise - fall);
+            const double zoom = zA * zB * zC;
+            const double cx = 2.0 * std::min(std::max((zoom - 1.0) / 13.0, 0.0), 1.0);
+            const float  half_ext = (float)(2.4 / zoom);
+            const float  aspect = (float)half / (float)h;
             mat4 O;
-            mat4_ortho(O, k.x - half_ext * aspect, k.x + half_ext * aspect,
-                            k.y - half_ext, k.y + half_ext, -1.0f, 1.0f);
+            mat4_ortho(O, (float)cx - half_ext * aspect, (float)cx + half_ext * aspect,
+                            -half_ext, half_ext, -1.0f, 1.0f);
             glUseProgram(flat.prog);
             glUniformMatrix4fv(flat.u_mvp, 1, GL_FALSE, O);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             pend_stream.render(flat.u_alpha);
             glUseProgram(0);
         }
-
-        static double t_prev = 0.0;
-        double dt_raw = t - t_prev;
-        double dt = dt_raw;
-        if (dt < 0.0 || dt > 0.1) dt = 0.1;   // clamp (pausa/lag: nessuno scatto)
-        t_prev = t;
 
         // ---- fps (EMA) e righe HUD aggiornate a 10 Hz ----
         static double fps_ema = 60.0;
@@ -428,12 +439,18 @@ int main(int argc, char* argv[]) {
         }
 
         // ---- chord streaming: quante corde emettere in questo frame ----
-        stream.frac_acc += rate_of(t) * dt;
-        long long to_emit = (long long)stream.frac_acc;
-        if (to_emit > 0) {
-            if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
-            stream.frac_acc -= (double)to_emit;
-            stream.push(t, pi_reader, CHORD_CURRENT_PALETTE, to_emit);
+        // In streaming finché le cifre lette non raggiungono quelle
+        // accumulate nella matrice statica; poi il diagramma è completo e il
+        // layer statico basta (solo refresh dei colori al cambio palette).
+        const bool streaming = (long long)stream.base_index < (long long)total_digits;
+        if (streaming) {
+            stream.frac_acc += rate_of(t) * dt;
+            long long to_emit = (long long)stream.frac_acc;
+            if (to_emit > 0) {
+                if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
+                stream.frac_acc -= (double)to_emit;
+                stream.push(t, pi_reader, CHORD_CURRENT_PALETTE, to_emit, ChordStream::DRAW_BUDGET);
+            }
         }
 
         // ---- viewport destro: chord diagram (stile digit circle) ----
@@ -534,6 +551,10 @@ int main(int argc, char* argv[]) {
             double ratio_l = (double)lit / ((double)half * h);
             std::printf("CHECK pendolo: lit=%.3f%% bbox=[%d..%d]x[%d..%d] (viewport %dx%d)\n",
                         100.0 * ratio_l, pl, pr, pt, pb, half, h);
+            std::printf("CHECK pendolo stato: theta=%.2f rad (%.1f pi), count=%d, head=(%.3f,%.3f)\n",
+                        theta_cur, theta_cur / PI_PEND, (int)pend_stream.count,
+                        (double)pend_stream.pts[pend_stream.head == 0 ? 0 : pend_stream.head - 1].x,
+                        (double)pend_stream.pts[pend_stream.head == 0 ? 0 : pend_stream.head - 1].y);
             bool pend_ok = ratio_l > 0.002 && (pr - pl) > 0.4f * half && (pb - pt) > 0.4f * h;
             std::printf("CHECK pendolo visibile: %s\n", pend_ok ? "OK" : "FALLITO");
 
@@ -583,6 +604,8 @@ int main(int argc, char* argv[]) {
             // cifre 0-9 attorno al cerchio del chord (grande, colore del settore):
             // posizione = trasformazione mondo->pixel del viewport destro
             {
+                // PI_VISUAL_LABEL_COLOR=1: cifre in magenta puro (sonda del check)
+                const bool lbl_dbg = std::getenv("PI_VISUAL_LABEL_COLOR") != nullptr;
                 float vh2 = (float)(w - half) < (float)h ? (float)(w - half) : (float)h;
                 float scale = vh2 / (2.0f * CHORD_WORLD);
                 float ccx = (float)half + (float)(w - half) * 0.5f;
@@ -592,8 +615,6 @@ int main(int argc, char* argv[]) {
                     float wx = CHORD_RLABEL * std::cos(a);
                     float wy = CHORD_RLABEL * std::sin(a);
                     const float* c = CHORD_CURRENT_PALETTE[d];
-                    // PI_VISUAL_LABEL_COLOR=1: cifre in magenta puro (probe del check)
-                    const bool lbl_dbg = std::getenv("PI_VISUAL_LABEL_COLOR") != nullptr;
                     char lbl[2] = {(char)('0' + d), 0};
                     float tw = hud.width(lbl, 2);
                     float th = hud.get(lbl, 2).h;
@@ -666,8 +687,10 @@ int main(int argc, char* argv[]) {
             reset_requested = false;
             t_start = SDL_GetPerformanceCounter();
             t_prev = 0.0;
-            stream.reset();
-            pend_stream.reset();
+            theta_cur = 0.0;         // anche la coreografia riparte da θ = 0
+            stream.reset();          // rolling window, base_index, accumulo frazionario
+            pend_stream.reset();     // curva da θ=0
+            chord_data.reset(pi_reader);   // matrice: riaccumulata subito
         }
 
         // ---- screenshot (tasto S): cattura il back buffer PRIMA dello swap ----

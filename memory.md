@@ -73,3 +73,21 @@ Sessione completata: 16 commit (STEP 0-15). pi_calc.cpp unificato con barriera R
 
 - Lo smoke test dell'app grafica va fatto DA SOLO: `(./Pi-visual >/tmp/pivis.log 2>&1 & echo $! > /tmp/pivis.pid); sleep 4; kill $(cat /tmp/pivis.pid)` — combinandolo con make nello stesso comando l'harness va in hang (già successo allo STEP 5).
 - I file di riferimento fractals.cpp e Hydrogen3D.cpp NON esistono (vedi Problemi aperti): i "riusa da..." del brief si intendono come "implementa con tecniche standard".
+
+## Rilavorazione grafica (richiesta utente 19/09, commit `53bdc3d` + seguente)
+
+Richieste: corde curve morbide non rette, cifre leggibili, centratura, pendolo visibile. Poi seconda passata: partenza lenta del chord, slow-motion sui passaggi ravvicinati del pendolo, cambio colore a ogni quasi-contatto, saturazione al posto della luminosità.
+
+- **Corde Bézier quadratiche** (32 segmenti, spessore ~2 px, alpha ~0.35) con ancoraggi distribuiti su 48 punti lungo l'arco di ogni settore: niente più ventaglio convergente. Cifre grandi (52 px SDL_ttf) colorate attorno all'anello, mondo→pixel via ortho del chord.
+- **Bug critico trovato**: ogni viewport faceva `glClear`, ma `glClear` ignora il viewport → il clear del pannello destro cancellava ogni frame il pendolo appena disegnato. Un solo clear per frame.
+- **Diagnostica oggettiva**: `PI_VISUAL_CHECK=1` legge il framebuffer a t=20 s e misura (centratura, tinte, pendolo, screenshot in pictures/). Trovò il bug del clear; le false letture iniziali erano sonde che leggevano *prima* del pass HUD. `PI_VISUAL_LABEL_COLOR=1` disegna le cifre in magenta puro per contarle (3148 px).
+- **Rate a due stadi**: rampa lineare 60 cifre/s fino a 100k cifre (t≈1665 s), poi saturazione esponenziale verso 9M/s. Ordine di grandezza del corretto (100M @ ~2 min) mantenuto via fattore SCALE nel blocco `#if 1` — il `#if 0` accanto conserva i numeri originali (1665→~2 min), da NON togliere: è la referenza per i test lunghi.
+- **Coreografia pendolo in spazio-θ** (niente keyframe-tempo): θ̇ = R·slow(θ) con finestre gaussiane di slow-motion (0.10×) centrare sui passaggi ravvicinati 14π (gap 22/7) e 226π (gap 355/113); camera zoom: 1→14→1→190→1 centrata su (2,0), dove nasce il pendolo. Disallineamento tempo↔θ della versione precedente eliminato.
+- **Cambio colore per svolta**: colore per riga calcolato dall'indice della svolta (θ/π): viola→giallo→verde→ciano→magenta→arancio (14 colori ciclici), via attributo per-vertice `a_row`; le righe dal passaggio in poi ereditano il nuovo colore, così durante lo slow-motion si vede la linea cambiare tinta dal punto di quasi-contatto.
+- **Saturazione invece di luminosità**: nessun fade verso il bianco; alpha cresce con la velocità (0.18→0.80) e la saturazione HSL va da 0.35 a 1.0: le prime corde sono grigie pastello, le ultime full colore (ragnatela accesa). 100% saturazione quando la matrice delle transizioni è satura.
+- **Budget di disegno**: a rate satura il push generava 150k corde/frame (98% CPU); tetto 400 corde/frame (consumate comunque tutte: HUD onesto, rolling window si rinnova) → CPU max 23%.
+- **camera.h trimmato** (−178 righe): solo `mat4_ortho`, `mat4_transform_point`, `keyframe_eval` (ancora usato per lo zoom), v3 rimasti di servizio; lo stack 3D (mul/inverse/lookAt/perspective) era morto.
+
+## Prossimi passi (rilavorazione grafica)
+
+- Verificare a schermo con l'utente le nuove velocità iniziali (rampa 60 cifre/s) e i due slow-motion cinematografici: se il primo slow a 14π tarda troppo col file lungo (t≈1665·fattore), abbassare soglia rampa 100k→30k cifre.

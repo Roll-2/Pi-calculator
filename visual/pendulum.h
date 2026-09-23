@@ -11,7 +11,12 @@
 // 355/113:
 //   θ  =  14π  →  δ = 2π(22 − 7π)    ≈ 0.056 rad  (gap ~0.056, visibile)
 //   θ  = 226π  →  δ = 2π(355 − 113π) ≈ 0.0002 rad (gap ~200× più sottile)
-// La coreografia della camera (STEP 8) punta proprio a questi due punti.
+//
+// COLORE: ogni volta che θ attraversa un multiplo pari di π (un "passaggio
+// ravvicinato" di e^(iθ) nei pressi di (2,0)) la curva cambia tinta, così il
+// cambio colore è visibile proprio nel momento in cui le due branche si
+// sfiorano. La tinta N-esima è presa da una ruota HSL (hue = 282° + N·47°,
+// satura 78%, lum 62%) convertita in RGB: viola → giallo → verde → ciano...
 // ============================================================
 #pragma once
 
@@ -33,44 +38,45 @@ struct PendulumVertex {
     float x, y, r, g, b, a;
 };
 
-// Colore del punto θ: gradiente ciano → magenta lungo la curva.
-static inline void pendulum_color(double th, double th_max, float out[4]) {
-    double s = th_max > 0 ? th / th_max : 0.0;
-    if (s < 0) s = 0; if (s > 1) s = 1;
-    out[0] = (float)(0.35 + 0.50 * s);
-    out[1] = (float)(0.80 - 0.30 * s);
-    out[2] = (float)(1.00 - 0.10 * s);
-    out[3] = 0.9f;
+// Tinta del passaggio N (0, 1, 2, ...): ruota HSL con passo 47° (irrazionale
+// rispetto al periodo, quindi passi consecutivi hanno sempre tinte diverse).
+static inline void pendulum_pass_color(long n, float out[4]) {
+    double h = std::fmod(282.0 + 47.0 * (double)n, 360.0) / 60.0;
+    const double s = 0.78, l = 0.62;
+    double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
+    double x = c * (1.0 - std::fabs(std::fmod(h, 2.0) - 1.0));
+    double r = 0, g = 0, b = 0;
+    if      (h < 1) { r = c; g = x; }
+    else if (h < 2) { r = x; g = c; }
+    else if (h < 3) { g = c; b = x; }
+    else if (h < 4) { g = x; b = c; }
+    else if (h < 5) { r = x; b = c; }
+    else            { r = c; b = x; }
+    const double m = l - c * 0.5;
+    out[0] = (float)(r + m);
+    out[1] = (float)(g + m);
+    out[2] = (float)(b + m);
+    out[3] = 0.95f;
 }
 
-// ---- polilinea statica per θ ∈ [0, th_max] (STEP 7) ----
-static inline void pendulum_build_strip(double th_max, double step,
-                                        std::vector<PendulumVertex>& out) {
-    out.clear();
-    out.reserve((size_t)(th_max / step) + 2);
-    for (double th = 0.0; th < th_max; th += step) {
-        float c[4];
-        pendulum_color(th, th_max, c);
-        out.push_back({(float)Pendulum::re(th), (float)Pendulum::im(th),
-                       c[0], c[1], c[2], c[3]});
-    }
-    float c[4];
-    pendulum_color(th_max, th_max, c);
-    out.push_back({(float)Pendulum::re(th_max), (float)Pendulum::im(th_max),
-                   c[0], c[1], c[2], c[3]});
+// Passaggio ravvicinato N per un θ: N = floor(θ / (2π)) (θ ≥ 0).
+static inline long pendulum_pass_index(double th) {
+    if (th < 0) th = 0;
+    return (long)(th / (2.0 * PI_PEND));
 }
 
-// ---- stream animato con buffer circolare (STEP 8) ----
+// ---- stream animato con buffer circolare ----
 // θ cresce verso theta_target; ogni STEP radianti si aggiunge un punto.
-// La capacità copre l'intera animazione (θ_max ≈ 226π ≈ 710 rad → ~35.500
-// punti con STEP 0.02), quindi il wrap è solo di sicurezza.
+// STEP 0.008 rad: a zoom 190 (secondo dolly-in) 0.008·π ≈ 0.025 px — le
+// spirali restano lisce al massimo ingrandimento. La capacità copre l'intera
+// animazione (θ_max ≈ 226π ≈ 710 rad → ~89k punti), il wrap è solo di sicurezza.
 struct PendulumStream {
-    static constexpr double STEP = 0.02;   // rad per punto (~50 punti/radiante)
-    static constexpr int    CAP  = 65536;  // punti nel buffer circolare
+    static constexpr double STEP = 0.008;  // rad per punto
+    static constexpr int    CAP  = 131072; // punti nel buffer circolare (2^17)
 
     std::vector<PendulumVertex> pts;
     double theta_head = 0.0;               // θ dell'ultimo punto inserito
-    double theta_max  = 1.0;               // per il gradiente di colore
+    double theta_max  = 1.0;
     int    tail = 0, head = 0, count = 0;  // buffer circolare
     int    dirty_start = 0, dirty_len = 0; // range da ricaricare sul VBO
     GLuint vao = 0, vbo = 0;
@@ -104,14 +110,15 @@ struct PendulumStream {
     }
 
     // Aggiunge punti finché θ non raggiunge il target (nessun ribasso: θ è
-    // monotono). Ritorna il numero di punti aggiunti.
+    // monotono). Il colore è quello del passaggio ravvicinato N = floor(θ/2π):
+    // a ogni sfioramento di (2,0) la curva cambia tinta. Ritorna i punti aggiunti.
     int advance(double theta_target) {
         if (theta_target < theta_head) return 0;
         int added = 0;
         while (theta_head + STEP <= theta_target) {
             theta_head += STEP;
             float c[4];
-            pendulum_color(theta_head, theta_max, c);
+            pendulum_pass_color(pendulum_pass_index(theta_head), c);
             pts[head] = {(float)Pendulum::re(theta_head), (float)Pendulum::im(theta_head),
                          c[0], c[1], c[2], c[3]};
             head = (head + 1) % CAP;
@@ -123,7 +130,7 @@ struct PendulumStream {
         return added;
     }
 
-    // Carica solo i punti nuovi e disegna la polilinea (line width 1 su core).
+    // Carica solo i punti nuovi e disegna la polilinea.
     // Richiede shader flat attivo e MVP già caricato.
     void render(GLint u_alpha_loc) {
         if (count == 0) return;
@@ -146,7 +153,6 @@ struct PendulumStream {
         glUniform1f(u_alpha_loc, 1.0f);
         glBindVertexArray(vao);
         if (count < CAP) {
-            // dati contigui in [0, head): un solo draw
             glDrawArrays(GL_LINE_STRIP, 0, head);
         } else if (tail < head) {
             glDrawArrays(GL_LINE_STRIP, tail, head - tail);
