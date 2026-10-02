@@ -128,12 +128,13 @@ static constexpr int   CHORD_REBUILD_EVERY = 512; // corde tra i rebuild della r
 // ---------------------------------------------------------------
 // Rate delle cifre (orologio di SCENA: con lo slow globale ai close-up
 // anche il chord rallenta insieme al pendolo).
-//   fase 1: RATE_SLOW cifre/s fino a RATE_SLOW_T → ~8 cifre a 10 s/cifra
-//   fase 2: esponenziale da lì: 100 cifre/s a ~500 cifre (t≈114 s),
-//           poi la crescita esaurisce 314.159 cifre a t≈146 s
+//   fase 1: RATE_SLOW cifre/s fino a RATE_SLOW_T → ~32 cifre a 2,5 s/cifra
+//           (inizio delicato ma non rallento: prima era 0.1 → 10 s/cifra)
+//   fase 2: esponenziale da lì: 100 cifre/s a ~500 cifre (t≈107 s),
+//           poi la crescita esaurisce 314.159 cifre a t≈140 s
 //           (i 100M a t≈174 s con cap RATE_MAX)
 // ---------------------------------------------------------------
-static constexpr double RATE_SLOW   = 0.1;    // cifre/s iniziali
+static constexpr double RATE_SLOW   = 0.4;    // cifre/s iniziali (2,5 s/cifra)
 static constexpr double RATE_SLOW_T = 80.0;   // s di rampa lenta (~8 cifre)
 static constexpr double RATE_K2     = 0.203;  // 0.1 → 100 in ~34 s
 static constexpr double RATE_MAX    = 9.0e6;  // saturazione
@@ -685,7 +686,7 @@ int main(int argc, char* argv[]) {
 
     // vincoli di progetto (pacing richiesto dall'utente)
     struct { double v, lo, hi; const char* nome; } checks[] = {
-        {t8,          60, 100, "cifra 8 (10 s/cifra)"},
+        {t8,          10,   40, "cifra 8 (2.5 s/cifra)"},
         {t500,       100, 135, "cifra 500"},
         {rate500, 70, 140, "rate a 500 cifre (~100)"},
         {tend,       110, 260, "file esaurito"},

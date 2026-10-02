@@ -316,9 +316,10 @@ animation lasts ~4 minutes.
   (quadratic 30 s fade, standard alpha blending — colours never saturate
   toward white) and each new chord is fainter than the previous one (alpha
   decays with the chord index, with a floor), so the web stays colourful
-  while only the newest chords stand out. Rate: ~10 s per digit for the
-  first 8 digits, then exponential acceleration (≈100 digits/s at 500;
-  all 314,159 digits consumed by t ≈ 159 s).
+  while only the newest chords stand out. Rate: gentle but not sluggish
+  start at 2.5 s per digit (~32 digits in the first 80 s), then
+  exponential acceleration (≈100 digits/s at 500; all 314,159 digits
+  consumed by t ≈ 153 s).
 
 ### Build & run
 
@@ -703,9 +704,10 @@ così i due pannelli accelerano insieme e l'animazione significativa dura
   in primo piano (fade quadratico di 30 s, blending alpha standard — i
   colori non schizzano mai verso il bianco) e ogni corda nuova è più
   flebile della precedente (alpha decrescente con indice, con floor), così
-  la ragnatela resta colorata e solo le ultime spiccano. Rate: ~10 s per
-  cifra per le prime 8 cifre, poi accelerazione esponenziale (~100 cifre/s
-  a 500; file da 314.159 cifre esaurito a t ≈ 159 s).
+  la ragnatela resta colorata e solo le ultime spiccano. Rate: partenza
+  delicata ma non rallentata (2,5 s a cifra, ~32 cifre nei primi 80 s),
+  poi accelerazione esponenziale (~100 cifre/s a 500; file da 314.159
+  cifre esaurito a t ≈ 153 s).
 
 ### Compilazione ed esecuzione
 
