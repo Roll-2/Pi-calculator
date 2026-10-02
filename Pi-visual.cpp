@@ -14,11 +14,13 @@
 //              le recenti brillano in primo piano con fade
 //
 // Un solo clock di SCENA t (comprimibile per i test con SCALE) guida
-// entrambi i pannelli: rate(t) per le cifre (10 s/cifra per le prime 8,
-// poi 100 cifre/s a ~500 cifre, esaurimento di 314.159 cifre a t≈146 s) e
-// θ̇ = R(θ)·slow(θ) per il pendolo. Il moltiplicatore slow(θ) — attivo
-// solo entro le finestre dei tre contatti — scala il dt GLOBALE: a ogni
-// close-up L'INTERA simulazione rallenta (pendolo + chord insieme).
+// entrambi i pannelli, che sono legati a θ e non a due curve di tempo
+// indipendenti: rate_cifre(θ) = C(θ)·R(θ) (0.5 cifre/s all'inizio, poi la
+// stessa accelerazione del pendolo) e θ̇ = R(θ)·slow(θ). Il moltiplicatore
+// slow(θ) — attivo solo entro le finestre dei tre contatti — scala il dt
+// GLOBALE: a ogni close-up L'INTERA simulazione rallenta (pendolo + chord
+// insieme). Finiti i dati la scena si CONGELA (dt = 0: t e il fade delle
+// corde si fermano, il tappeto finale resta colorato).
 //
 // Tasti:  Esc   esci
 //         0-3   palette (0 provvisoria, 1 Botanica, 2 Alba, 3 Notturna)
@@ -139,17 +141,19 @@ struct FlatShader {
 
 // ------------------------- clock e rate condivisi -------------------------
 // UN SOLO orologio di scena t guida entrambi i pannelli.
-//   - Le cifre: rate(t) in chord.h — 0.1 cifre/s per i primi 80 s (10 s
-//     per cifra: si vedono 3, 1415...), poi esponenziale (100 cifre/s a
-//     ~500 cifre, file da 314.159 cifre esaurito a t≈146 s).
+//   - Le cifre: rate(θ) in chord.h — CIFRE PER RADIANTE di θ, cioè
+//     C(θ)·R(θ): 0.5 cifre/s (1 cifra ogni 2 s) all'inizio, poi la C(θ)
+//     insegue l'accelerazione del pendolo. C1 è calibrato sul file: le
+//     cifre disponibili finiscono alla FINE DEL TERZO CLOSE-UP.
 //   - Il pendolo: θ̇ = R(θ)·slow(θ) con rate per segmento e close-up
 //     lenti ai tre contatti (pendulum.h: contatti, finestre, camera).
 //   - slow(θ) scala il dt di SCENA (quindi anche rate·dt): a ogni
 //     close-up rallenta l'intera simulazione.
+//   - Finite le cifre (o la coreografia) la scena si blocca: dt = 0.
 //
 // Il fattore SCALE comprime il tempo per i test (1.0: tempi reali).
 #if 1
-static const double SCALE = 1.0;    // tempi reali (10 s/cifra, contatti a ~52/124/246 s)
+static const double SCALE = 1.0;    // tempi reali (0.5 cifre/s, contatti a ~52/120/244 s)
 #else
 static const double SCALE = 0.1;    // TEST: scena in slow-motion 10x (debug ravvicinato)
 #endif
@@ -301,6 +305,13 @@ int main(int argc, char* argv[]) {
     // — con tempi ~52 / 120 / 244 s (verificati da CHORD_TEST).
     const double THETA_MAX = pend_contact_th(2) + pend_window(2) + 120.0 * PEND_R[3];
     const double total_digits = (double)pi_reader.decimal_digits();
+    // Coefficiente cifre/rad calibrato sul file: le cifre disponibili
+    // finiscono alla FINE DEL TERZO CLOSE-UP, così lo spettacolo si chiude
+    // sul climax e i due pannelli restano coerenti (file enormi: satura).
+    chord_set_coefficient(chord_c1_for(total_digits));
+    std::printf("rate cifre: %.2f cifre/s iniziali, %.3f cifre/rad dopo il rodaggio, "
+                "%lld cifre disponibili, fine a θ=%.0f rad\n",
+                CH_RATE_START, chord_c1, (long long)total_digits, CH_TH_END);
     PendulumStream pend_stream;
     pend_stream.init_gl(THETA_MAX);
     PendulumBirth pend_birth;              // ramo nascita (2,0): sempre in quadro
@@ -327,6 +338,7 @@ int main(int argc, char* argv[]) {
     bool closeup_shot[3] = {false, false, false};  // screenshot a ogni close-up
 
     bool running = true;
+    bool finished = false;   // BLOCCO FINALE: cifre finite (o θ a fondo) → scena ferma
     while (running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -364,6 +376,10 @@ int main(int argc, char* argv[]) {
         // a ogni quasi-contatto del pendolo rallenta anche il chord
         double slow = pend_slow(theta_cur);
         double dt = dt_raw * slow;
+        // BLOCCO FINALE: a scena finita dt = 0 — t si ferma (quindi anche il
+        // fade delle corde in streaming: il tappeto finale resta vivo e
+        // colorato, senza sparire) e θ non avanza più (niente loop infinito).
+        if (finished) dt = 0.0;
         t += dt;                              // t = tempo di scena (HUD, rate, fade)
 
         int w = 0, h = 0;
@@ -414,7 +430,7 @@ int main(int argc, char* argv[]) {
         // ---- fps (EMA) e righe HUD aggiornate a 10 Hz ----
         static double fps_ema = 60.0;
         if (dt_raw > 1e-4) fps_ema = 0.9 * fps_ema + 0.1 * (1.0 / dt_raw);
-        static std::string hud_digits, hud_time, hud_rate, hud_fps;
+        static std::string hud_digits, hud_time, hud_rate, hud_fps, hud_end;
         static double hud_accum = 1.0;   // primo frame: aggiorna subito
         hud_accum += dt_raw;
         if (hud_accum >= 0.1) {
@@ -424,25 +440,42 @@ int main(int argc, char* argv[]) {
             char b[64];
             std::snprintf(b, sizeof(b), "tempo: %.1f s", t);
             hud_time = b;
-            std::snprintf(b, sizeof(b), "rate: %s cifre/s", fmt_group((long long)rate_of(t) / SCALE).c_str());
+            // rate delle cifre = C(θ)·R(θ): segue l'accelerazione del pendolo
+            if (finished) {
+                std::snprintf(b, sizeof(b), "rate: — scena ferma");
+                hud_end = "COMPLETATO — R per riavviare, Esc per uscire";
+            } else {
+                std::snprintf(b, sizeof(b), "rate: %s cifre/s",
+                              fmt_group((long long)rate_of(theta_cur)).c_str());
+                hud_end = "";
+            }
             hud_rate = b;
             std::snprintf(b, sizeof(b), "fps: %.1f", fps_ema);
             hud_fps = b;
         }
 
         // ---- chord streaming: quante corde emettere in questo frame ----
-        // In streaming finché il file non è esaurito: le cifre vengono TUTTE
-        // consumate al ritmo di rate(t) (HUD onesto), con tetto per frame.
-        const bool streaming = (long long)stream.base_index < (long long)total_digits;
-        if (streaming) {
-            stream.frac_acc += rate_of(t) * dt;
+        // Finché il file non è esaurito: le cifre vengono TUTTE consumate al
+        // ritmo di rate(θ) (HUD onesto), con tetto per frame. L'ultima cifra
+        // del file non genera corda (serve la successiva): `remaining` è il
+        // tetto esatto, così base_index non supera mai la fine del file.
+        const long long remaining = (long long)total_digits - 1 - (long long)stream.base_index;
+        if (!finished && remaining > 0) {
+            stream.frac_acc += rate_of(theta_cur) * dt;
             long long to_emit = (long long)stream.frac_acc;
             if (to_emit > 0) {
+                if (to_emit > remaining) { to_emit = remaining; stream.frac_acc = 0.0; }
+                else stream.frac_acc -= (double)to_emit;
                 if (to_emit > 500000) to_emit = 500000;   // tetto per frame (burst)
-                stream.frac_acc -= (double)to_emit;
                 stream.push(t, pi_reader, to_emit, ChordStream::DRAW_BUDGET);
             }
         }
+        // ---- FINE: file esaurito OPPURE coreografia arrivata a θ_max ----
+        // Rilevato qui ma applicato al frame successivo (dt = 0), così lo
+        // screenshot di controllo sotto cattura l'ULTIMO frame disegnato.
+        const bool just_finished = !finished &&
+            ((long long)stream.base_index + 1 >= (long long)total_digits ||
+             theta_cur >= THETA_MAX);
         // ragnatela crescente: ricontestualizza il layer statico quando lo
         // streaming ne ha aggiunte abbastanza (e alla prima corda emessa)
         if (stream.web_dirty) {
@@ -488,6 +521,21 @@ int main(int argc, char* argv[]) {
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
 
+        // ---- BLOCCO FINALE: la scena si spegne e resta ferma ----
+        // Da qui dt = 0: θ non avanza, il rate non cresce più, il clock di
+        // scena t si ferma (e con lui il fade delle corde: il tappeto finale
+        // resta vivo e colorato invece di svuotarsi). Il tappeto che si vede
+        // è quello dell'ultimo frame — la memoria completa del file è la
+        // ragnatela statica, che a qui contiene tutte le transizioni.
+        if (just_finished) {
+            finished = true;
+            std::printf("FINE ANIMAZIONE: %lld/%lld cifre, θ=%.0f rad, t=%.1f s — "
+                        "scena congelata (R per riavviare)\n",
+                        (long long)stream.base_index, (long long)total_digits,
+                        theta_cur, t);
+            std::fflush(stdout);
+        }
+
         // ---- verifica geometrica automatica (una tantum, a t>20 s) ----
         // (viewport a finestra intera: screenshot_save usa GL_VIEWPORT)
         glViewport(0, 0, w, h);
@@ -524,8 +572,8 @@ int main(int argc, char* argv[]) {
                             std::fabs(rad_v / rad_h - 1.0f) < 0.05f;
             std::printf("CHECK centratura: %s\n", centered ? "OK" : "FALLITA");
 
-            // (2) varietà di colore spostata nella fase 2: con la partenza a
-            //     10 s/cifra a t=20 s ci sono solo 2 cifre — vedi sotto
+            // (2) varietà di colore spostata nella fase 2: a t=20 s ci sono
+            //     solo ~10 cifre — vedi sotto
 
             // 2) pendolo: pixel non neri nel half sinistro + bounding box
             long long lit = 0;
@@ -572,7 +620,7 @@ int main(int argc, char* argv[]) {
         }
 
         // ---- verifica tinte (fase 2): scatta quando ~400 cifre sono state
-        // consumate (t≈113 s con la partenza a 10 s/cifra) — prima non c'è
+        // consumate (t≈83 s) — prima non c'è
         // abbastanza ragnatela per parlare di varietà di colore ----
         if (selfcheck && !selfcheck_tint_done && (long long)stream.base_index >= 400) {
             selfcheck_tint_done = true;
@@ -650,8 +698,8 @@ int main(int argc, char* argv[]) {
                      16.0f, (float)h - 14.0f, 1, 1, 1, 0.95f);
 
             // contatori in alto a destra, allineati a destra
-            const std::string* lines[4] = {&hud_digits, &hud_time, &hud_rate, &hud_fps};
-            for (int i = 0; i < 4; ++i) {
+            const std::string* lines[5] = {&hud_digits, &hud_time, &hud_rate, &hud_fps, &hud_end};
+            for (int i = 0; i < 5; ++i) {
                 float tw = hud.width(*lines[i]);
                 hud.draw(*lines[i], (float)w - 16.0f - tw, (float)h - 14.0f - i * hud.line_h,
                          1, 1, 1, 0.9f);
@@ -716,6 +764,15 @@ int main(int argc, char* argv[]) {
         }
         hud.prune();
 
+        // ---- screenshot del BLOCCO FINALE (dopo l'HUD: nel quadro finale si
+        // vede anche il banner "COMPLETATO — R per riavviare") ----
+        if (just_finished && selfcheck) {
+            glViewport(0, 0, w, h);
+            std::string sf = screenshot_save("pictures/check_fine");
+            std::printf("CHECK screenshot fine: %s\n", sf.c_str());
+            std::fflush(stdout);
+        }
+
         // ---- verifica etichette (dopo l'HUD: con PI_VISUAL_LABEL_COLOR=1 le
         // cifre grandi sono magenta puro) + screenshot finale del check ----
         if (selfcheck && selfcheck_done && !selfcheck_hud_done && t > 20.0) {
@@ -745,6 +802,7 @@ int main(int argc, char* argv[]) {
             t_raw_prev = 0.0;
             t = 0.0;                   // la scena riparte da zero
             theta_cur = 0.0;           // anche la coreografia riparte da θ = 0
+            finished = false;          // la scena riparte: il blocco finale si toglie
             stream.reset();          // rolling window, base_index, accumulo frazionario
             pend_stream.reset();     // curva da θ=0
             chord_web.clear();       // ragnatela riparte da zero

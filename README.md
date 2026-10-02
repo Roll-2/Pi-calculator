@@ -135,10 +135,12 @@ split -b 1M pi100m.txt pi_part_ # split into 1 MB chunks
 ## Pi-visual — the π visualizer
 
 `Pi-visual.cpp` (+ headers in `visual/`) is an SDL2 + OpenGL 3.3 core window
-split into two viewports, driven by one clock `t` and one monotonically
-increasing rate `rate(t)`, so both panels accelerate together; a global
-slow-motion kicks in at every pendulum close-up and the significant
-animation lasts ~4 minutes.
+split into two viewports, driven by one clock `t` and **one shared
+choreography in θ**: the digit rate is measured in *digits per radian of θ*
+(`rate(θ) = C(θ)·R(θ)`, with `R(θ)` the pendulum's own angular rate), so the
+two panels cannot disagree — they slow down and speed up together. A global
+slow-motion kicks in at every pendulum close-up, and when the digits run out
+the whole scene **freezes** instead of spinning forever: ~4 minutes.
 
 - **left — compound pendulum** `Z(θ) = e^(iθ) + e^(iπθ)`, with π hard-coded
   to 17 decimals. The camera works with **events** at the three near-closures
@@ -159,10 +161,18 @@ animation lasts ~4 minutes.
   (quadratic 30 s fade, standard alpha blending — colours never saturate
   toward white) and each new chord is fainter than the previous one (alpha
   decays with the chord index, with a floor), so the web stays colourful
-  while only the newest chords stand out. Rate: gentle but not sluggish
-  start at 2.5 s per digit (~32 digits in the first 80 s), then
-  exponential acceleration (≈100 digits/s at 500; all 314,159 digits
-  consumed by t ≈ 153 s).
+  while only the newest chords stand out. Rate: **0.5 digits/s** (one digit
+  every 2 s) while `3, 1415…` grows slowly for the first ~18 s, then the
+  coefficient `C(θ)` ramps up and the digit rate simply *follows the
+  pendulum's acceleration* (≈21 digits/s at 500 digits, ≈3.5·10³ digits/s
+  during the final sprint). `C₁` is calibrated on the open file, so that all
+  of its digits are consumed at the **end of the third close-up** (t ≈ 249 s;
+  314,158 of 314,159 digits with the default file). From that instant
+  `dt = 0`: θ stops, the rate stops growing, the scene clock stops — which
+  also freezes the shader fade, so the final carpet stays on screen with its
+  colours (no fading to nothing, no white-out) and the HUD prints
+  `COMPLETATO — R per riavviare`. A digits file longer than the choreography
+  saturates `C₁` and the scene still stops at θ_max.
 
 ### Build & run
 
@@ -360,10 +370,13 @@ split -b 1M pi100m.txt pi_part_ # dividi in blocchi da 1 MB
 ## Pi-visual — il visualizzatore di π
 
 `Pi-visual.cpp` (+ header in `visual/`) è una finestra SDL2 + OpenGL 3.3
-core divisa in due viewport, guidati da un solo clock `t` e da una sola
-rate `rate(t)` monotona crescente, così i due pannelli accelerano insieme;
-una slow motion globale scatta a ogni close-up del pendolo e
-l'animazione significativa dura ~4 minuti.
+core divisa in due viewport, guidati da un solo clock `t` e da **una sola
+coreografia in θ**: il rate delle cifre è in *cifre per radiante di θ*
+(`rate(θ) = C(θ)·R(θ)`, con `R(θ)` il rate angolare del pendolo), quindi i
+due pannelli non possono contraddirsi — rallentano e accelerano insieme.
+Una slow motion globale scatta a ogni close-up del pendolo e, quando le
+cifre finiscono, tutta la scena si **congela** invece di girare all'infinito:
+~4 minuti.
 
 - **sinistro — pendolo composto** `Z(θ) = e^(iθ) + e^(iπθ)`, con π hardcoded
   a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
@@ -385,10 +398,18 @@ l'animazione significativa dura ~4 minuti.
   in primo piano (fade quadratico di 30 s, blending alpha standard — i
   colori non schizzano mai verso il bianco) e ogni corda nuova è più
   flebile della precedente (alpha decrescente con indice, con floor), così
-  la ragnatela resta colorata e solo le ultime spiccano. Rate: partenza
-  delicata ma non rallentata (2,5 s a cifra, ~32 cifre nei primi 80 s),
-  poi accelerazione esponenziale (~100 cifre/s a 500; file da 314.159
-  cifre esaurito a t ≈ 153 s).
+  la ragnatela resta colorata e solo le ultime spiccano. Rate: **0,5 cifre/s**
+  (1 cifra ogni 2 s) mentre `3, 1415…` cresce lentamente nei primi ~18 s, poi
+  il coefficiente `C(θ)` sale e il rate delle cifre *segue l'accelerazione
+  del pendolo* (~21 cifre/s a 500 cifre, ~3,5·10³ cifre/s nello sprint
+  finale). `C₁` è calibrato sul file aperto: tutte le sue cifre vengono
+  consumate alla **fine del terzo close-up** (t ≈ 249 s; 314.158 cifre su
+  314.159 con il file di default). Da quel momento `dt = 0`: θ si ferma, il
+  rate smette di crescere, il clock di scena si ferma — e con lui si ferma
+  anche il fade calcolato nello shader, così il tappeto finale resta a
+  schermo con i suoi colori (niente sparizioni, niente schiaramento) e
+  l'HUD stampa `COMPLETATO — R per riavviare`. Un file più lungo della
+  coreografia satura `C₁` e la scena si ferma comunque a θ_max.
 
 ### Compilazione ed esecuzione
 
