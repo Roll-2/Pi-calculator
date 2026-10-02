@@ -107,3 +107,24 @@ Causa scoperta: il workflow interrotto aveva lasciato su disco SOLO PARTE del la
 
 - L'utente deve valutare a schermo: velocità iniziale (600 cifre/s in test, 60 reali), i due eventi di dolly+slow a 14π (t≈129 s) e 226π (t≈1610 s) in test, la ragnatela crescente.
 - Per la run reale (rampa 28 min): mettere `#if 0` sul blocco SCALE.
+
+## Quarta passata (feedback utente: colore per quasi-contatto, close-up rapido e mirato, corde flebili)
+
+Richieste: (1) colore che cambia al passaggio ravvicinato e non a ogni periodo; (2) zoom rapido e mirato sul punto di quasi-scontro, senza perdere mai il pendolo, con slow-motion a ogni close-up, almeno i primi 3; (3) corde che diventano più flebili (non più bianche), ricche all'inizio; (4) file 314.159 cifre per finire prima; (5) efficienza.
+
+- **Contatti come fonte unica** (`visual/pendulum.h`): k = {7, 113, 33102} → θ_c = 14π, 226π, 66204π. La separazione visibile è il **miss** = distanza MINIMA curva↔(2,0) = δ*² con δ* = −φ/(1+π), φ = Im Z(θ_c): 1.8014e-4 / 2.0914e-9 / 8.4222e-10 (concorda col minimo numerico nel self-test). Zoom_i = 0.72/miss → 4,0e3 / 3,44e8 / 8,55e8. La "punta del ricciolo" a zoom alto è invisibile: le due linee quasi-parallele (curva di ritorno vs ramo nascita) sono la caratteristica risolvibile.
+- **Vertici come offset da (2,0)**: float32 con valori ~2 non reggono miss ~1e-9; con offset sì. Snap ESATTO dei campioni sia su θ_c (punta ricciolo) sia su δ* (incrocio y=0 / miss).
+- **Coreografia**: rate per segmento PEND_R = {0.9, 14, 2400, 40} rad/s, finestre pend_window = 1.61·R, slow 0.10 al centro di ogni evento, ponti smoothstep, zoom log-interpolato, camera con offset pend_cam_cx (centro offset da (2,0), vincolo −2 al zoom 1) e verticale fissa a 0; passo adattivo pend_point_step (base 0.008, raffinato 0.0202·√d con floor = miss).
+- **Slow GLOBALE**: `slow = pend_slow(theta_cur)` moltiplica il dt della scena → pendolo E chord rallentano insieme a ogni close-up. `t` = tempo di scena, `t_raw` orologio grezzo con clamp.
+- **Chord senza additivo**: blending alpha standard (niente più schiacciamento verso il bianco); alpha streaming decrescente per indice chord_stream_alpha(k) = 0.85·(1+k/400)^−0.30 con floor 0.08; il render disegna SOLO le corde con birth > t−FADE (2-3 corde invece di 768k vertici → grosso risparmio GPU); MSAA 4x→2x.
+- **Rate cifre**: 0.1 cifre/s fino a 80 s (~8 cifre a 10 s/cifra), poi esponenziale RATE_K2 → 100 cifre/s a ~500 cifre, cap 9e6. File default `pi_314159.txt`; cifre esaurite a t≈159 s. Close-up a t≈52/120/244 s, durata 10 s l'uno.
+- **PendulumBirth**: VBO statico θ∈[0,0.06] sempre disegnato (l'altra metà del quasi-contatto; il buffer circolare lo espellerebbe dopo ~1048 rad).
+- **Fix screenshot**: screenshot_save usa il GL_VIEWPORT corrente → i PNG dei check partivano dal viewport del pannello destro (1352×1466 invece di 2704×1466); fix = glViewport(0,0,w,h) prima di ogni blocco selfcheck.
+- **Fix geometria close-up 1** (verifica numerica sui PNG con decodificatore zlib Python in /tmp/rowscan.py): al 1° contatto il salto di θ per frame (0.9·slow·dt ≈ 1.4e-3 rad) era MINORE del passo adattivo al cross (4.8e-3 rad) → la testa disegnata si fermava ESATTAMENTE sul centro e la seconda linea mancava nella metà superiore (dove il ramo nascita la farebbe risaltare). Fix = `pend_shot_th(i) = cross_th + 1.1·step(cross_th)`: lo scatto aspetta che la testa superi l'incrocio di un passo, così il segmento finale attraversa tutta l'altezza. Risultato misurato: due linee a x=1091 e x=1311 (220 px) su TUTTA l'altezza in tutti e 3 i close-up; sotto il centro solo la curva (il ramo nascita nasce a (2,0) e va in alto) — corretto.
+- **Self-check a 3 fasi**: fase A t>20 s (centratura 0.998, pendolo OK), fase B base_index≥400 (351 tinte > 15), close-up i quando θ > pend_shot_th(i) e zoom > 0.9·zoom_i (log con θ, zoom, testa animata e testa DISEGNATA vs miss). Reset aggiornato (t, t_raw_prev).
+- **Verifiche**: make pulito (0 warning); chord_test e camera_test OK; run PI_VISUAL_CHECK 265 s verde (351 tinte, close-up 1/2/3 scattati, nessun processo residuo, log senza errori).
+- Fix minore: typo `// ...---- if (reset_requested)` su stessa riga (cascata di errori) separato; duplicazione della voce PI_VISUAL_CHECK nel README (IT) rimossa.
+
+## Prossimi passi (quarta passata)
+
+- Controllo visivo dell'utente sui tre close-up e sulla ragnatela; se la separazione delle due linee o i tempi non convince, si ritocca pend_shot_th/zoom_i/coreografia.

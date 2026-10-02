@@ -293,32 +293,38 @@ y-cruncher — but on a dedicated 2U server with 384 cores, 1.5 TB of RAM,
 
 `Pi-visual.cpp` (+ headers in `visual/`) is an SDL2 + OpenGL 3.3 core window
 split into two viewports, driven by one clock `t` and one monotonically
-increasing rate `rate(t)` (exponential saturating at t ≈ 120 s), so both
-panels accelerate together and the significant animation lasts ~2 minutes.
-Afterwards the app stays alive with the stabilized animation and the HUD.
+increasing rate `rate(t)`, so both panels accelerate together; a global
+slow-motion kicks in at every pendulum close-up and the significant
+animation lasts ~4 minutes.
 
 - **left — compound pendulum** `Z(θ) = e^(iθ) + e^(iπθ)`, with π hard-coded
-  to 17 decimals. The camera works with **events**: at each of the two famous
-  near-closures of π — 14π (gap ≈ 0.056) and 226π (gap ≈ 0.0002, sub-pixel),
-  the only points where the curve returns to graze its birth point (2,0) —
-  the view dollies in and time **slows down** so the near-contact and the
-  colour change of the curve are clearly visible; outside the events, wide
-  view and full speed. The curve changes colour at every pass.
+  to 17 decimals. The camera works with **events** at the three near-closures
+  of π — 14π, 226π and 66204π, where the curve grazes its birth point (2,0)
+  at distance `miss` = δ*² ≈ 1.8e-4 / 2.1e-9 / 8.4e-10: at each event the
+  view zooms in logarithmically (zoom = 0.72/miss, up to ~8.6e8×) and time
+  **slows down** (global slow-motion shared with the chord panel), so the
+  close-up shows two clearly separated near-vertical lines — the returning
+  curve vs the birth branch, ~220 px apart; they never touch. The curve
+  changes colour **only at a near-contact** (four HSL tints), not per period,
+  so the eye can count the close calls.
 - **right — chord diagram** of the digits of π read from `pi100m.txt` via
   `mmap` (never copied into memory): 10 colored sectors (0–9) with large
   digit labels around the ring, one **curved** chord (quadratic Bézier) per
   consecutive digit pair with anchor points spread along each sector arc.
   The web **grows from zero**: the static matrix is fed by the live stream
   and rebuilt every 512 chords; recent chords shine in the foreground
-  (quadratic 30 s fade, additive blending) then settle into the web. A
-  two-stage rate: slow linear ramp (60 digits/s) up to 100k digits, then
-  exponential acceleration to saturation.
+  (quadratic 30 s fade, standard alpha blending — colours never saturate
+  toward white) and each new chord is fainter than the previous one (alpha
+  decays with the chord index, with a floor), so the web stays colourful
+  while only the newest chords stand out. Rate: ~10 s per digit for the
+  first 8 digits, then exponential acceleration (≈100 digits/s at 500;
+  all 314,159 digits consumed by t ≈ 159 s).
 
 ### Build & run
 
 ```bash
 make           # builds Pi-visual (see the Makefile or the header comment)
-./Pi-visual    # reads pi100m.txt in the current directory
+./Pi-visual    # reads pi_314159.txt in the current directory (default)
 ```
 
 ### Keys
@@ -333,18 +339,20 @@ make           # builds Pi-visual (see the Makefile or the header comment)
 
 ### Options & limits
 
-- `--pi <file>` reads a different digits file (format: `3.` + digits, no
-  trailing newline — e.g. `pi300k.txt` or any `pi_<N>.txt` produced by
-  `pi_calc`). The file is verified against the known 100-digit prefix at
-  startup; on mismatch the program exits with an error.
+- `--pi <file>` reads a different digits file (default `pi_314159.txt`;
+  format: `3.` + digits, no trailing newline — e.g. `pi300k.txt` or any
+  `pi_<N>.txt` produced by `pi_calc`). The file is verified against the
+  known 100-digit prefix at startup; on mismatch the program exits with an
+  error.
 - Requires macOS ARM + Homebrew (`sdl2`, `sdl2_ttf`; zlib ships with the
   OS), OpenGL 3.3 core, and the system font
   `/System/Library/Fonts/Helvetica.ttc` (no external assets).
 - The mmap'd digits file does not count toward any RAM budget: resident
   memory stays ~100 MB even with the 100M-digit file.
-- With `PI_VISUAL_CHECK=1` the app runs an automatic framebuffer diagnostic
-  at t = 20 s (ring centering/roundness, chord color variety, pendulum
-  visibility, big digit labels) and saves control PNGs into `pictures/`.
+- With `PI_VISUAL_CHECK=1` the app runs a three-phase automatic
+  framebuffer diagnostic (ring centering + pendulum visibility at t = 20 s,
+  chord colour variety at ~400 digits, then a control screenshot at each of
+  the three pendulum close-ups) and saves control PNGs into `pictures/`.
   `PI_VISUAL_LABEL_COLOR=1` additionally draws the labels in pure magenta
   so the check can count their pixels.
 
@@ -677,29 +685,33 @@ così i due pannelli accelerano insieme e l'animazione significativa dura
 
 - **sinistro — pendolo composto** `Z(θ) = e^(iθ) + e^(iπθ)`, con π hardcoded
   a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
-  camera scritta a mano lavora a **eventi**: in corrispondenza delle due
-  famose quasi-chiusure di π — 14π (gap ≈ 0,056) e 226π (gap ≈ 0,0002,
-  sottopixel), gli unici punti in cui la curva torna a sfiorare il suo
-  punto di nascita (2,0) — la vista fa dolly-in e il tempo rallenta
-  (**slow motion**) per far vedere il quasi-contatto e il cambio colore
-  della curva; fuori dagli eventi, vista ampia e velocità piena. La curva
-  cambia colore a ogni svolta.
+  camera scritta a mano lavora a **eventi**: alle tre quasi-chiusure di π —
+  14π, 226π e 66204π, dove la curva sfiora il suo punto di nascita (2,0) a
+  distanza `miss` = δ*² ≈ 1,8e-4 / 2,1e-9 / 8,4e-10 — la vista zooma in modo
+  logaritmico (zoom = 0,72/miss, fino a ~8,6e8×) e il tempo rallenta (**slow
+  motion globale**, condivisa col chord): il close-up mostra due linee
+  quasi-verticali ben separate — la curva di ritorno e il ramo di nascita,
+  ~220 px di distanza — che non si toccano mai. La curva cambia colore
+  **solo al quasi-contatto** (quattro tinte HSL), non a ogni periodo, così
+  l'occhio conta i passaggi ravvicinati.
 - **destro — chord diagram** delle cifre di π lette da `pi100m.txt` via
   `mmap` (mai copiate in memoria): 10 settori colorati (0–9) con le cifre
   grandi attorno all'anello, una corda **curva** (Bézier quadratica) per
   ogni coppia di cifre consecutive con ancoraggi distribuiti lungo l'arco
-  di ogni settore. La ragnatela **cresce da zero**: la matrice statica è
-  alimentata dallo streaming e ricontestualizzata ogni 512 corde; le corde
-  recenti brillano in primo piano (fade quadratico di 30 s, blending
-  additivo) poi si fondono nella ragnatela. Rate a due stadi: rampa
-  lineare lenta (60 cifre/s) fino a 100k cifre, poi accelerazione
-  esponenziale fino alla saturazione.
+  di ogni settore.  La ragnatela **cresce da zero**: la matrice statica è alimentata dallo
+  streaming e ricontestualizzata ogni 512 corde; le corde recenti brillano
+  in primo piano (fade quadratico di 30 s, blending alpha standard — i
+  colori non schizzano mai verso il bianco) e ogni corda nuova è più
+  flebile della precedente (alpha decrescente con indice, con floor), così
+  la ragnatela resta colorata e solo le ultime spiccano. Rate: ~10 s per
+  cifra per le prime 8 cifre, poi accelerazione esponenziale (~100 cifre/s
+  a 500; file da 314.159 cifre esaurito a t ≈ 159 s).
 
 ### Compilazione ed esecuzione
 
 ```bash
 make           # compila Pi-visual (vedi il Makefile o il commento in testa)
-./Pi-visual    # legge pi100m.txt nella directory corrente
+./Pi-visual    # legge pi_314159.txt nella directory corrente (default)
 ```
 
 ### Tasti
@@ -714,25 +726,23 @@ make           # compila Pi-visual (vedi il Makefile o il commento in testa)
 
 ### Opzioni e limiti
 
-- `--pi <file>` legge un file di cifre diverso (formato: `3.` + cifre, senza
-  newline finale — es. `pi300k.txt` o qualsiasi `pi_<N>.txt` prodotto da
-  `pi_calc`). Il file viene verificato contro il prefisso noto di 100 cifre
-  all'avvio; in caso di discordanza il programma esce con errore.
+- `--pi <file>` legge un file di cifre diverso (default `pi_314159.txt`;
+  formato: `3.` + cifre, senza newline finale — es. `pi300k.txt` o
+  qualsiasi `pi_<N>.txt` prodotto da `pi_calc`). Il file viene verificato
+  contro il prefisso noto di 100 cifre all'avvio; in caso di discordanza il
+  programma esce con errore.
 - Richiede macOS ARM + Homebrew (`sdl2`, `sdl2_ttf`; zlib è di sistema),
   OpenGL 3.3 core e il font di sistema
   `/System/Library/Fonts/Helvetica.ttc` (nessun asset esterno).
 - Il file mmap di cifre non pesa su nessun budget RAM: la memoria residente
   resta ~100 MB anche con il file da 100M cifre.
-- Con `PI_VISUAL_CHECK=1` l'app esegue a t = 20 s una diagnostica automatica
-  del framebuffer (centratura/rotondità dell'anello, varietà di colore delle
-  corde, visibilità del pendolo, cifre grandi) e salva PNG di controllo in
-  `pictures/`. Con `PI_VISUAL_LABEL_COLOR=1` le etichette vengono inoltre
-  disegnate in magenta puro perché il check possa contarne i pixel.
-- Con `PI_VISUAL_CHECK=1` l'app esegue a t = 20 s una diagnostica automatica
-  del framebuffer (centratura/rotondità dell'anello, varietà di colore delle
-  corde, visibilità del pendolo, cifre grandi) e salva PNG di controllo in
-  `pictures/`. Con `PI_VISUAL_LABEL_COLOR=1` le etichette vengono inoltre
-  disegnate in magenta puro perché il check possa contarne i pixel.
+- Con `PI_VISUAL_CHECK=1` l'app esegue una diagnostica automatica del
+  framebuffer a tre fasi (centratura anello + visibilità del pendolo a
+  t = 20 s, varietà di colore delle corde a ~400 cifre, poi uno screenshot
+  di controllo a ogni uno dei tre close-up del pendolo) e salva PNG di
+  controllo in `pictures/`. Con `PI_VISUAL_LABEL_COLOR=1` le etichette
+  vengono inoltre disegnate in magenta puro perché il check possa contarne
+  i pixel.
 
 ## Struttura del progetto
 

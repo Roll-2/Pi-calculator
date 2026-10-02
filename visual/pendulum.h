@@ -2,24 +2,52 @@
 // pendulum.h — pendolo composto Z(θ) = e^(iθ) + e^(iπθ)
 //
 // π è hardcoded a 17 cifre decimali (3.14159265358979323): oltre la 17ª
-// cifra l'effetto sulla curva sarebbe sottopixel a qualunque zoom della
-// coreografia.
+// cifra l'effetto sulla curva è trascurabile anche al 3° contatto
+// (errore di fase ~6.5e-11 vs gap 1.2e-4).
 //
-// La curva è famosa per le "quasi-chiusure" vicino a (2, 0): quando θ è un
-// multiplo pari di π, e^(iθ) = 1, e la seconda fase πθ ricade vicino a un
-// multiplo di 2π con l'approssimazione di π con i convergenti di 22/7 e
-// 355/113:
-//   θ  =  14π  →  δ = 2π(22 − 7π)    ≈ 0.056 rad  (gap ~0.056, visibile)
-//   θ  = 226π  →  δ = 2π(355 − 113π) ≈ 0.0002 rad (gap ~200× più sottile)
+// CONTATTI RAVVICINATI (UNICA FONTE per colori, camera e slow motion):
+//   θ_c = 2πk con k = 7   (22/7)          miss ≈ 1.80e-4  → zoom ~4.0e3
+//                k = 113 (355/113)        miss ≈ 2.09e-9  → zoom ~3.4e8
+//                k = 33102 (103993/33102) miss ≈ 8.42e-10 → zoom ~8.6e8
+// "miss" = distanza MINIMA tra la curva e il punto di nascita (2,0):
+//   φ = Im Z(θ_c) è la fase residua, δ* = −φ/(1+π) il parametro in cui il
+//   ramo uscente incrocia il livello y=0 e, ai termini dominanti,
+//   miss = δ*² (verificato numericamente: il minimo cade a δ*).
+// È IL MISS la separazione visibile in close-up — due linee quasi
+// parallele (la curva che ritorna vs il ramo nascita) — NON la punta del
+// ricciolo: a zoom elevato il ricciolo (scala φ) è una linea dritta e non
+// si vede. I vertici sono OFFSET da (2,0): a zoom 1e8 la precisione
+// float32 di posizioni ~2 non basterebbe per miss ~1e-9.
 //
-// COLORE: ogni volta che θ attraversa un multiplo pari di π (un "passaggio
-// ravvicinato" di e^(iθ) nei pressi di (2,0)) la curva cambia tinta, così il
-// cambio colore è visibile proprio nel momento in cui le due branche si
-// sfiorano. La tinta N-esima è presa da una ruota HSL (hue = 282° + N·47°,
-// satura 78%, lum 62%) convertita in RGB: viola → giallo → verde → ciano...
+// Perché SOLO questi tre: k=106 (θ=212π) ha gap quasi identico a k=7 ma a
+// 106 giri la curva è già densa e il graffiamento non è più discernibile;
+// i ~290 membri della famiglia 113n+106 tra 226π e 66204π (gap decrescente
+// fino a 1.2e-4) cadono tutti nella ragnatela ormai piena. Solo i tre
+// convergenti "notevoli" sono quasi-contatti visibili a vista d'occhio.
+//
+// COLORE: la curva cambia tinta SOLO quando supera un contatto (indice
+// 0..3 → 4 tinte dalla ruota HSL hue = 282° + 47°·n): il cambio colore
+// cade esattamente sull'istante del quasi-contatto, non a ogni 2π.
+//
+// COREOGRAFIA: rate per segmento R[4] (rad per secondo di scena), finestra
+// evento W_i = 1.61·R_i (durata ~10 s con slow 0.1), ponti di rate lisci
+// dopo ogni evento. Lo slow moltiplica il dt GLOBALE (vedi Pi-visual.cpp):
+// pendolo E chord rallentano insieme a ogni close-up.
+//
+// PASSO ADATTIVO: base 0.008 rad; raffinato vicino ai contatti
+// (sagitta ≤ 1 px al massimo zoom in cui il punto è visibile) + campioni
+// ESATTI su θ_c (punta del ricciolo) e sull'incrocio δ* (punto del miss).
+// Costi: ~centinaia di punti in più per contatto, nessuna alluvione nel
+// buffer.
+//
+// RAMO NASCITA: il tratto θ∈[0,0.06] (parte da (2,0)) ha un VBO dedicato
+// sempre disegnato — il buffer circolare lo espelle dopo ~1048 rad, ma è
+// l'altra metà del quasi-contatto al 3° contatto: senza, il close-up sarebbe
+// vuoto.
 // ============================================================
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -38,9 +66,41 @@ struct PendulumVertex {
     float x, y, r, g, b, a;
 };
 
-// Tinta del passaggio N (0, 1, 2, ...): ruota HSL con passo 47° (irrazionale
-// rispetto al periodo, quindi passi consecutivi hanno sempre tinte diverse).
-static inline void pendulum_pass_color(long n, float out[4]) {
+// ---------------- contatti (unica fonte) ----------------
+static const int   PEND_N_CONTACTS = 3;
+static const long  PEND_CONTACT_K[PEND_N_CONTACTS] = {7, 113, 33102};
+
+static inline double pend_contact_th(int i) {
+    return 2.0 * PI_PEND * (double)PEND_CONTACT_K[i];
+}
+// Im Z(θ_c): fase residua del quasi-contatto (con segno)
+static inline double pend_contact_y(int i) {
+    return Pendulum::im(pend_contact_th(i));
+}
+// δ* = −φ/(1+π): parametro in cui il ramo uscente incrocia y=0
+static inline double pend_cross_delta(int i) {
+    return -pend_contact_y(i) / (1.0 + PI_PEND);
+}
+// distanza MINIMA curva↔(2,0) al contatto i (= δ*²): la separazione
+// realmente visibile in close-up
+static inline double pend_miss(int i) {
+    double d = pend_cross_delta(i);
+    return d * d;
+}
+// θ in cui il ramo usente passa a distanza minima da (2,0)
+static inline double pend_cross_th(int i) {
+    return pend_contact_th(i) + pend_cross_delta(i);
+}
+// indice contatto superato da th (0..3): colore della curva
+static inline int pend_contact_index(double th) {
+    int n = 0;
+    for (int i = 0; i < PEND_N_CONTACTS; ++i)
+        if (th >= pend_contact_th(i)) n = i + 1;
+    return n;
+}
+
+// Tinta dell'indice contatto n (0 = iniziale): ruota HSL passo 47°.
+static inline void pendulum_contact_color(int n, float out[4]) {
     double h = std::fmod(282.0 + 47.0 * (double)n, 360.0) / 60.0;
     const double s = 0.78, l = 0.62;
     double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
@@ -59,20 +119,128 @@ static inline void pendulum_pass_color(long n, float out[4]) {
     out[3] = 0.95f;
 }
 
-// Passaggio ravvicinato N per un θ: N = floor(θ / (2π)) (θ ≥ 0).
-static inline long pendulum_pass_index(double th) {
-    if (th < 0) th = 0;
-    return (long)(th / (2.0 * PI_PEND));
+// ---------------- coreografia (funzioni di θ) ----------------
+// Rate per segmento (rad per secondo di scena, senza slow):
+//   0 → contatto 1 : 0.9   (piano: i primi digit si vedono crescere)
+//   contatto 1 → 2 : 14
+//   contatto 2 → 3 : 2400  (slog: la curva riempie il disco in ~80 s)
+//   dopo contatto 3 : 40    (rielaborazione morbida)
+static const double PEND_R[4] = {0.9, 14.0, 2400.0, 40.0};
+// Finestra evento: W = 1.61·R  →  durata evento ≈ 6.21·W/R ≈ 10 s
+static const double PEND_W_K   = 1.61;
+static const double PEND_SLOW_R = 0.10;            // slow minimo
+// Ponti di rate (smoothstep) dopo l'evento i: [θ_i+W_i, +PEND_BRIDGE[i]]
+static const double PEND_BRIDGE[PEND_N_CONTACTS] = {60.0, 6000.0, 60.0};
+// Separazione visibile al contatto: frazione di mezza-altezza viewport
+static const double PEND_ZOOM_FRAC = 0.30;         // zoom_i = 0.72/miss_i
+static const double PEND_CAM_MARG  = 0.94;         // (2,0) entro 94% del half-width
+// Passo base (rad/punto) e coefficiente del passo adattivo
+static const double PEND_STEP_BASE = 0.008;
+static const double PEND_STEP_K    = 0.0202;       // sagitta ≤ 1 px al zoom max
+
+static inline double pend_smooth01(double s) {
+    if (s <= 0.0) return 0.0;
+    if (s >= 1.0) return 1.0;
+    return s * s * (3.0 - 2.0 * s);
+}
+
+static inline double pend_window(int i) {          // semi-ampiezza θ dell'evento i
+    return PEND_W_K * PEND_R[i];
+}
+
+// bump smoothstep centrato sul contatto i
+static inline double pend_bump(double th, int i) {
+    return pend_smooth01(1.0 - std::fabs(th - pend_contact_th(i)) / pend_window(i));
+}
+
+// zoom al contatto i: il MISS occupa PEND_ZOOM_FRAC della mezza-altezza
+static inline double pend_contact_zoom(int i) {
+    static double z[PEND_N_CONTACTS];
+    static bool init = false;
+    if (!init) {
+        for (int k = 0; k < PEND_N_CONTACTS; ++k)
+            z[k] = PEND_ZOOM_FRAC * 2.4 / pend_miss(k);
+        init = true;
+    }
+    return z[i];
+}
+
+// slow globale: 1 fuori dagli eventi, PEND_SLOW_R al centro di ogni evento
+static inline double pend_slow(double th) {
+    double slow = 1.0;
+    for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+        double d = std::fabs(th - pend_contact_th(i)) / pend_window(i);
+        if (d < 1.0) {
+            double s = 1.0 - (1.0 - PEND_SLOW_R) * (1.0 - pend_smooth01(d));
+            if (s < slow) slow = s;
+        }
+    }
+    return slow;
+}
+
+// zoom della camera: interpolazione LOGARITMICA (con Z fino a 6000 una
+// interpolazione lineare salterebbe subito a zoom centinaia)
+static inline double pend_zoom(double th) {
+    double lz = 0.0;
+    for (int i = 0; i < PEND_N_CONTACTS; ++i)
+        lz += pend_bump(th, i) * std::log(pend_contact_zoom(i));
+    return lz > 0.0 ? std::exp(lz) : 1.0;
+}
+
+// rate θ(θ) con ponti lisci tra i segmenti (continui dove slow = 1)
+static inline double pend_rate_at(double th) {
+    double R = PEND_R[0];
+    for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+        double st = pend_contact_th(i) + pend_window(i);
+        if (th > st)
+            R += (PEND_R[i + 1] - R) * pend_smooth01((th - st) / PEND_BRIDGE[i]);
+    }
+    return R;
+}
+
+// centro orizzontale in COORDINI OFFSET da (2,0): tiene (2,0) entro
+// PEND_CAM_MARG del half-width a qualunque zoom — niente più traslazioni
+// che perdono il pendolo durante la discesa — con vincolo −2 al zoom 1
+// (vista ampia centrata sul disco)
+static inline double pend_cam_cx(double zoom, float aspect) {
+    double half_w = 2.4 * (double)aspect / zoom;
+    return -std::min(2.0, PEND_CAM_MARG * half_w);
+}
+
+// passo adattivo: sagitta ≤ 1 px al massimo zoom in cui il punto è visibile
+// (distanza stimata da (2,0) con floor = miss del contatto più vicino)
+static inline double pend_point_step(double th) {
+    double s = PEND_STEP_BASE;
+    for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+        double d = 4.14 * std::fabs(th - pend_contact_th(i));
+        double g = pend_miss(i);
+        if (d < g) d = g;
+        double si = PEND_STEP_K * std::sqrt(d);
+        if (si < s) s = si;
+    }
+    return s > 1e-9 ? s : 1e-9;
+}
+
+// θ minimo per lo scatto del close-up: un passo OLTRE l'incrocio y=0, così
+// la testa disegnata supera il centro e il segmento finale attraversa tutta
+// l'altezza. Senza il margine al 1° contatto il salto di θ per frame
+// (rate 0.9·slow ≈ 1.4e-3 rad) era più piccolo del passo adattivo (4.8e-3
+// rad): la curva si fermava ESATTAMENTE sul centro e la seconda linea
+// mancava nella metà superiore, dove il ramo nascita la farebbe risaltare.
+static inline double pend_shot_th(int i) {
+    double tw = pend_cross_th(i);
+    return tw + 1.1 * pend_point_step(tw);
 }
 
 // ---- stream animato con buffer circolare ----
-// θ cresce verso theta_target; ogni STEP radianti si aggiunge un punto.
-// STEP 0.008 rad: a zoom 190 (secondo dolly-in) 0.008·π ≈ 0.025 px — le
-// spirali restano lisce al massimo ingrandimento. La capacità copre l'intera
-// animazione (θ_max ≈ 226π ≈ 710 rad → ~89k punti), il wrap è solo di sicurezza.
+// θ cresce verso theta_target; passo adattivo (pend_point_step) con snap
+// ESATTO su θ_c (punta del ricciolo) e sull'incrocio δ* (punto del miss):
+// la separazione visibile in close-up cade dove deve. I vertici sono
+// offset da (2,0) (vedi testa file). CAP copre la coreografia con passo
+// base (θ_max ≈ 208k rad → il wrap decima la coda).
 struct PendulumStream {
-    static constexpr double STEP = 0.008;  // rad per punto
-    static constexpr int    CAP  = 131072; // punti nel buffer circolare (2^17)
+    static constexpr double STEP = 0.008;   // passo base (rad/punto)
+    static constexpr int    CAP  = 131072;  // punti nel buffer circolare (2^17)
 
     std::vector<PendulumVertex> pts;
     double theta_head = 0.0;               // θ dell'ultimo punto inserito
@@ -110,16 +278,30 @@ struct PendulumStream {
     }
 
     // Aggiunge punti finché θ non raggiunge il target (nessun ribasso: θ è
-    // monotono). Il colore è quello del passaggio ravvicinato N = floor(θ/2π):
-    // a ogni sfioramento di (2,0) la curva cambia tinta. Ritorna i punti aggiunti.
-    int advance(double theta_target) {
+    // monotono). Passo = step_fn(θ) con snap: se un contatto cade entro il
+    // prossimo passo, il punto cade ESATTAMENTE su θ_c. Colore = indice
+    // dell'ultimo contatto superato (cambio tinta solo ai quasi-contatti).
+    template <typename StepFn>
+    int advance(double theta_target, StepFn step_fn) {
         if (theta_target < theta_head) return 0;
         int added = 0;
-        while (theta_head + STEP <= theta_target) {
-            theta_head += STEP;
+        for (;;) {
+            if (theta_head >= theta_target) break;
+            double s = step_fn(theta_head);
+            if (!(s > 1e-9)) s = 1e-9;
+            double next = theta_head + s;
+            for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+                double tc = pend_contact_th(i);
+                if (tc > theta_head && tc < next) next = tc;   // snap: punta ricciolo
+                double tw = pend_cross_th(i);
+                if (tw > theta_head && tw < next) next = tw;   // snap: incrocio (miss)
+            }
+            if (next > theta_target) break;
+            theta_head = next;
             float c[4];
-            pendulum_pass_color(pendulum_pass_index(theta_head), c);
-            pts[head] = {(float)Pendulum::re(theta_head), (float)Pendulum::im(theta_head),
+            pendulum_contact_color(pend_contact_index(theta_head), c);
+            // offset da (2,0): precisione float32 piena anche a zoom 1e8
+            pts[head] = {(float)(Pendulum::re(theta_head) - 2.0), (float)Pendulum::im(theta_head),
                          c[0], c[1], c[2], c[3]};
             head = (head + 1) % CAP;
             if (count < CAP) count++; else tail = (tail + 1) % CAP;
@@ -160,6 +342,53 @@ struct PendulumStream {
             glDrawArrays(GL_LINE_STRIP, tail, CAP - tail);
             glDrawArrays(GL_LINE_STRIP, 0, head);
         }
+        glBindVertexArray(0);
+    }
+};
+
+// ---- ramo nascita (VBO statico, SEMPRE disegnato) ----
+// Tratto θ∈[0, 0.06] che parte da (2,0): è l'altra metà di ogni
+// quasi-contatto. Il buffer circolare lo espelle dopo ~1048 rad (normale
+// durante lo slog verso il 3° contatto), quindi ha un VBO dedicato.
+// Vertici come offset da (2,0), come lo stream.
+struct PendulumBirth {
+    static constexpr double TH = 0.06;   // copre la vista a zoom 13 (half_ext 0.185)
+    static constexpr int    N  = 601;    // passo 1e-4 rad
+    GLuint vao = 0, vbo = 0;
+
+    void init_gl() {
+        std::vector<PendulumVertex> p(N);
+        float c[4];
+        pendulum_contact_color(0, c);     // tinta iniziale (prima dei contatti)
+        for (int k = 0; k < N; ++k) {
+            double th = TH * (double)k / (double)(N - 1);
+            p[k] = {(float)(Pendulum::re(th) - 2.0), (float)Pendulum::im(th),
+                    c[0], c[1], c[2], c[3]};
+        }
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)N * sizeof(PendulumVertex),
+                     p.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(PendulumVertex),
+                              (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+
+    void destroy_gl() {
+        if (vbo) glDeleteBuffers(1, &vbo);
+        if (vao) glDeleteVertexArrays(1, &vao);
+        vao = vbo = 0;
+    }
+
+    void render(GLint u_alpha_loc) {
+        glUniform1f(u_alpha_loc, 1.0f);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_LINE_STRIP, 0, N);
         glBindVertexArray(0);
     }
 };

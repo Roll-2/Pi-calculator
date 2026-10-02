@@ -125,6 +125,34 @@ static constexpr float CHORD_GAP_DEG  = 2.0f;   // gap tra settori (gradi)
 static constexpr float CHORD_FADE_S   = 30.0f;  // durata fade corde in streaming
 static constexpr int   CHORD_REBUILD_EVERY = 512; // corde tra i rebuild della ragnatela
 
+// ---------------------------------------------------------------
+// Rate delle cifre (orologio di SCENA: con lo slow globale ai close-up
+// anche il chord rallenta insieme al pendolo).
+//   fase 1: RATE_SLOW cifre/s fino a RATE_SLOW_T → ~8 cifre a 10 s/cifra
+//   fase 2: esponenziale da lì: 100 cifre/s a ~500 cifre (t≈114 s),
+//           poi la crescita esaurisce 314.159 cifre a t≈146 s
+//           (i 100M a t≈174 s con cap RATE_MAX)
+// ---------------------------------------------------------------
+static constexpr double RATE_SLOW   = 0.1;    // cifre/s iniziali
+static constexpr double RATE_SLOW_T = 80.0;   // s di rampa lenta (~8 cifre)
+static constexpr double RATE_K2     = 0.203;  // 0.1 → 100 in ~34 s
+static constexpr double RATE_MAX    = 9.0e6;  // saturazione
+
+static inline double rate_of(double t) {
+    if (t < RATE_SLOW_T) return RATE_SLOW;
+    double r = RATE_SLOW * std::exp(RATE_K2 * (t - RATE_SLOW_T));
+    return r < RATE_MAX ? r : RATE_MAX;
+}
+
+// Ricchezza di colore della corda k-esima emessa: le PRIME sono ricche
+// (0.85), le successive sempre più flebili (mai verso il bianco: si
+// sommano in sfumature sempre più tenui, floor 0.08).
+static inline float chord_stream_alpha(long long k) {
+    double a = 0.85 * std::pow(1.0 + (double)k / 400.0, -0.30);
+    if (a < 0.08) a = 0.08;
+    return (float)a;
+}
+
 static constexpr float CHORD_TWO_PI = 6.28318530717958647692f;
 static constexpr float CHORD_PI     = 3.14159265358979323846f;
 
@@ -471,12 +499,14 @@ struct ChordStream {
             if (tl < 1e-9f) { tx = 1; ty = 0; tl = 1; }
             float nx = -ty / tl * CHORD_WIDTH, ny = tx / tl * CHORD_WIDTH;
             if (s > 0) {
-                q[out++] = {px + pnx, py + pny, c[0], c[1], c[2], 0.75f, b};
-                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.75f, b};
-                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.75f, b};
-                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], 0.75f, b};
-                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], 0.75f, b};
-                q[out++] = {x - nx, y - ny, c[0], c[1], c[2], 0.75f, b};
+                // alpha = ricchezza decrescente con l'indice di emissione
+                float ca = chord_stream_alpha(emitted);
+                q[out++] = {px + pnx, py + pny, c[0], c[1], c[2], ca, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], ca, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], ca, b};
+                q[out++] = {px - pnx, py - pny, c[0], c[1], c[2], ca, b};
+                q[out++] = {x + nx, y + ny, c[0], c[1], c[2], ca, b};
+                q[out++] = {x - nx, y - ny, c[0], c[1], c[2], ca, b};
             }
             px = x; py = y; pnx = nx; pny = ny;
         }
@@ -510,11 +540,26 @@ struct ChordStream {
             glBindBuffer(GL_ARRAY_BUFFER, 0);
             dirty_start = 0; dirty_len = 0;
         }
+        // disegna SOLO le corde ancora vive (birth > t_now - FADE): all'inizio
+        // (rate 0.1 cifre/s) sono 2-3 corde invece di 768k vertici — il grosso
+        // del risparmio GPU nelle prime due minute, che è dove si guarda di più
+        int nslots = (int)std::min<long long>(emitted, N);
+        int start = (emitted < N) ? 0 : (int)head;
+        while (nslots > 0 && birth[start] < (float)(t_now - (double)CHORD_FADE_S)) {
+            start = (start + 1) % N;
+            nslots--;
+        }
         glUseProgram(prog);
         glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, mvp);
         glUniform1f(u_now, (float)t_now);
         glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, N * VPC);
+        if (start + nslots <= N) {
+            if (nslots > 0)
+                glDrawArrays(GL_TRIANGLES, start * VPC, nslots * VPC);
+        } else {
+            glDrawArrays(GL_TRIANGLES, start * VPC, (N - start) * VPC);
+            glDrawArrays(GL_TRIANGLES, 0, (start + nslots - N) * VPC);
+        }
         glBindVertexArray(0);
         glUseProgram(0);
     }
@@ -522,7 +567,9 @@ struct ChordStream {
 
 #ifdef CHORD_TEST
 #include <cstdlib>
-// Self-test: bilanciamento + costruzione mesh + controlli di forma.
+#include "pendulum.h"   // coreografia + contatti (verificati qui sotto)
+// Self-test: bilanciamento + costruzione mesh + controlli di forma
+// + pacing cifre (rate_of) + coreografia pendolo (contatti/tempi/zoom).
 int main(int argc, char* argv[]) {
     const char* path = (argc > 1) ? argv[1] : "pi100m.txt";
     PiReader r;
@@ -563,6 +610,100 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::printf("chord_test: OK (mesh curve + ancoraggi distribuiti)\n");
+
+    // ---- 1) contatti: miss (distanza minima curva↔(2,0)) e zoom ----
+    static const double miss_ref[3] = {1.8014e-4, 2.0914e-9, 8.4222e-10};
+    bool ok = true;
+    for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+        double miss = pend_miss(i);
+        double z = pend_contact_zoom(i);
+        // minimo numerico di |Z(θ)−(2,0)| attorno al contatto (ricerca
+        // ternaria su [θ_c−span, θ_c+span], span che contiene δ*)
+        double span = 2.0 * std::fabs(pend_cross_delta(i)) + 1e-6;
+        auto dist2 = [](double th) {
+            double dx = Pendulum::re(th) - 2.0, dy = Pendulum::im(th);
+            return dx * dx + dy * dy;
+        };
+        double lo = pend_contact_th(i) - span, hi = pend_contact_th(i) + span;
+        for (int it = 0; it < 300; ++it) {
+            double third = (hi - lo) / 3.0;
+            double m1 = lo + third, m2 = hi - third;
+            if (dist2(m1) < dist2(m2)) hi = m2; else lo = m1;
+        }
+        double best = std::sqrt(dist2(0.5 * (lo + hi)));
+        std::printf("contatto %d: k=%ld θ=%.4f rad (%.0fπ), miss=%.4e "
+                    "(minimo numerico %.4e), zoom=%.3g, W=%.2f rad\n",
+                    i + 1, PEND_CONTACT_K[i], pend_contact_th(i),
+                    pend_contact_th(i) / PI_PEND, miss, best, z, pend_window(i));
+        double rel = std::fabs(miss - miss_ref[i]) / miss_ref[i];
+        if (rel > 0.05) { std::printf("FALLITO: miss%d fuori tolleranza (%.3f)\n", i, rel); ok = false; }
+        double rel2 = std::fabs(best - miss) / miss;
+        if (rel2 > 0.05) { std::printf("FALLITO: minimo numerico≠formula (%.3f)\n", rel2); ok = false; }
+        if (z < 100.0 || z > 2.0e9) { std::printf("FALLITO: zoom%d fuori range\n", i); ok = false; }
+    }
+
+    // ---- 2) pacing: replica il loop principale (dt 1/60, slow globale) ----
+    // t = tempo di SCENA (parametrizza rate_of); tw = tempo reale (quello
+    // che l'utente guarda: gli eventi con slow 0.1 durano ~10 s reali
+    // benché coprano solo ~3.2 s di scena).
+    double t = 0.0, tw = 0.0, th = 0.0, dig = 0.0;
+    double t8 = -1, t500 = -1, tend = -1, rate500 = -1;
+    double tc[PEND_N_CONTACTS], ev_in[PEND_N_CONTACTS], ev_dur[PEND_N_CONTACTS];
+    bool   in_ev[PEND_N_CONTACTS];
+    for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+        tc[i] = ev_in[i] = ev_dur[i] = -1; in_ev[i] = false;
+    }
+    const double total = (double)r.decimal_digits();
+    for (long frame = 0; frame < 60L * 420; ++frame) {
+        double slow = pend_slow(th);
+        double dts = (1.0 / 60.0) * slow;       // dt di scena (slow GLOBALE)
+        t  += dts;
+        tw += 1.0 / 60.0;                       // tempo reale
+        th += pend_rate_at(th) * dts;
+        double prev = dig;
+        dig += rate_of(t) * dts;
+        if (t8   < 0 && prev < 8.0   && dig >= 8.0)   t8 = tw;
+        if (t500 < 0 && prev < 500.0 && dig >= 500.0) { t500 = tw; rate500 = rate_of(t); }
+        if (tend < 0 && dig >= total) tend = tw;
+        for (int i = 0; i < PEND_N_CONTACTS; ++i) {
+            if (tc[i] < 0 && th >= pend_contact_th(i)) tc[i] = tw;
+            double d = std::fabs(th - pend_contact_th(i)) / pend_window(i);
+            if (!in_ev[i] && d < 1.0) { in_ev[i] = true; ev_in[i] = tw; }
+            else if (in_ev[i] && d >= 1.0) { ev_dur[i] = tw - ev_in[i]; in_ev[i] = false; }
+        }
+        if (tend > 0 && th > pend_contact_th(2) + pend_window(2) + 100.0) break;
+    }
+    for (int i = 0; i < PEND_N_CONTACTS; ++i)
+        if (in_ev[i]) ev_dur[i] = tw - ev_in[i];
+
+    std::printf("pacing: cifra 8 a t=%.1f s, cifra 500 a t=%.1f s (rate %.0f), "
+                "%s a t=%.1f s (tempi reali)\n", t8, t500, rate500,
+                total < 1e6 ? "314159 cifre" : "file completo", tend);
+    for (int i = 0; i < PEND_N_CONTACTS; ++i)
+        std::printf("evento %d: contatto a t=%.1f s, durata close-up %.1f s\n",
+                    i + 1, tc[i], ev_dur[i]);
+
+    // vincoli di progetto (pacing richiesto dall'utente)
+    struct { double v, lo, hi; const char* nome; } checks[] = {
+        {t8,          60, 100, "cifra 8 (10 s/cifra)"},
+        {t500,       100, 135, "cifra 500"},
+        {rate500, 70, 140, "rate a 500 cifre (~100)"},
+        {tend,       110, 260, "file esaurito"},
+        {tc[0],       40,  75, "contatto 1"},
+        {tc[1],      100, 170, "contatto 2"},
+        {tc[2],      180, 330, "contatto 3"},
+        {ev_dur[0],    5,  20, "durata evento 1"},
+        {ev_dur[1],    5,  20, "durata evento 2"},
+        {ev_dur[2],    5,  20, "durata evento 3"},
+    };
+    for (auto& c : checks) {
+        bool pass = c.v >= c.lo && c.v <= c.hi && c.v > 0;
+        std::printf("%s: %.1f (atteso %.0f..%.0f) %s\n", c.nome, c.v, c.lo, c.hi,
+                    pass ? "OK" : "FALLITO");
+        if (!pass) ok = false;
+    }
+    if (!ok) return 1;
+    std::printf("chord_test: OK (contatti + pacing + coreografia)\n");
     return 0;
 }
 #endif
