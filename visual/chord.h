@@ -127,62 +127,102 @@ static constexpr float CHORD_FADE_S   = 30.0f;  // durata fade corde in streamin
 static constexpr int   CHORD_REBUILD_EVERY = 512; // corde tra i rebuild della ragnatela
 
 // ---------------------------------------------------------------
-// RATE DELLE CIFRE — IN SPAZIO θ, COERENTE CON IL PENDOLO
+// RATE DELLE CIFRE — CURVA A TRE ATTI, CALIBRATA SUL FILE
 //
-// Non è una curva nel tempo ma una DENSITÀ in cifre per RADIANTE di θ:
-//       rate(θ) = C(θ) · pend_rate_at(θ)
-// così il pannello destro accelera, rallenta e si blocca esattamente dove
-// accelera il sinistro (stessi tre quasi-contatti, stessa slow motion
-// globale): i due grafici non possono contraddirsi.
+// Lo spettacolo dura CH_SHOW_LEN = 150 s REALI e il rate delle cifre è
+// una funzione del tempo reale w (non di θ): i due pannelli restano
+// coerenti per costruzione (stessi tre close-up, stessa slow motion
+// globale, che rallenta anche l'emissione) ma il ritmo dei numeri è
+// una scelta di montaggio, non una conseguenza del rate angolare.
 //
-//   θ < CH_TH_HOLD (16 rad ≈ 18 s)  piano a 0.5 cifre/s (1 cifra ogni 2 s:
-//       si vede crescere 3, 1415… lentamente, poi la rampa parte SUBITO);
-//   16 → CH_RAMP_END (1° contatto + ponte di rate)  C sale da CH_C0 a C1
-//       con smoothstep: il rate insegue l'accelerazione del pendolo
-//       (0.5 → ~20 cifre/s entro il 1° contatto);
-//   poi C1 costante → rate ∝ rate del pendolo: 14 rad/s ≈ 21 cifre/s,
-//       2400 rad/s (slog verso il 3° contatto) ≈ 3.6·10³ cifre/s.
+//   w < 18 s   piano a 0,5 cifre/s (1 cifra ogni 2 s: si vede crescere
+//              3, 1415… lentamente);
+//   18 → 120 s rampa smoothstep fino a ~1,3·10³ cifre/s (36% del file);
+//   120 → 150 s BOOST finale smoothstep fino a ~9·10³ cifre/s (64% del
+//              file, ~200.000 cifre negli ultimi 30 s): parte insieme al
+//              2° quasi-contatto e copre lo sprint finale del pendolo
+//              fino alla fine del 3° close-up.
 //
-// C1 è calibrato sul file aperto (chord_c1_for): le cifre disponibili
-// finiscono alla FINE DEL TERZO CLOSE-UP (θ_end ≈ 66204π+W₂), quindi lo
-// spettacolo si chiude sul climax invece di finire a metà. File troppo
-// grandi: C1 satura a CH_C1_MAX e la scena si ferma comunque a THETA_MAX
-// (fine della coreografia) — in ogni caso non gira all'infinito.
+// Le due ampiezze (ch_a2, ch_a3) sono CALIBRATE sul file aperto e sulla
+// coreografia reale: si integra il pendolo (slow compresa) e si risolve
+// A2 = quota2·(tot−R0·W0)/W2, A3 = quota3·(tot−R0·W0)/W3, così il file
+// è finito ESATTAMENTE a CH_SHOW_LEN. File troppo grandi: il rate satura
+// a CH_A_MAX e la scena si ferma comunque a CH_SHOW_LEN.
 // ---------------------------------------------------------------
-static constexpr double CH_RATE_START = 0.5;                // cifre/s iniziali
-static const double CH_C0 = CH_RATE_START / PEND_R[0];     // 0.5556 cifre/rad
-static constexpr double CH_TH_HOLD  = 16.0;   // rad di piano iniziale (~18 s)
-static const double CH_RAMP_END = pend_contact_th(0) + pend_window(0) + PEND_BRIDGE[0];
-static const double CH_TH_END    = pend_contact_th(2) + pend_window(2);
-static constexpr double CH_C1_MIN  = 0.8;      // clamp per file molto corti
-static constexpr double CH_C1_MAX  = 6.0;      // clamp per file molto lunghi
+static constexpr double CH_SHOW_LEN   = 150.0;   // s: durata ESATTA dello spettacolo
+static constexpr double CH_RATE_START = 0.5;     // cifre/s iniziali (1 ogni 2 s)
+static constexpr double CH_T_HOLD     = 18.0;    // s di piano iniziale
+static constexpr double CH_T_ACT2     = 120.0;   // s: inizio del boost finale
+static constexpr double CH_QUOTA2     = 0.36;    // quota di cifre nel ramp 18→120 s
+static constexpr double CH_QUOTA3     = 0.64;    // quota nel boost 120→150 s
+static constexpr double CH_A_MIN      = 30.0;    // clamp (file corti)
+static constexpr double CH_A_MAX      = 60000.0; // clamp (file enormi)
 
-static double chord_c1 = 1.483;   // cifre/rad dopo il rodaggio (calibrato: vedi sotto)
+static double ch_a2 = 0.0;   // livello di rate a fine atto 2 (cifre/s)
+static double ch_a3 = 0.0;   // livello di rate a fine spettacolo (cifre/s)
 
-static inline double chord_digits_per_rad(double th) {
-    if (th <= CH_TH_HOLD) return CH_C0;
-    double u = (th - CH_TH_HOLD) / (CH_RAMP_END - CH_TH_HOLD);
-    return CH_C0 + (chord_c1 - CH_C0) * pend_smooth01(u);
+// Due basi smoothstep DISGIUNTE: ψ2 sale 0→1 su [18,120] s, ψ3 sale 0→1
+// su [120,150] s. Il rate è una CATENA di transizioni (piano → A2 → A3),
+// non una somma: così ogni atto contribuisce solo nel suo intervallo e la
+// curva resta continua con derivata zero ai due giunti.
+static inline double chord_psi2(double w) {
+    if (w <= CH_T_HOLD) return 0.0;
+    if (w >= CH_T_ACT2) return 1.0;
+    return pend_smooth01((w - CH_T_HOLD) / (CH_T_ACT2 - CH_T_HOLD));
+}
+static inline double chord_psi3(double w) {
+    if (w <= CH_T_ACT2) return 0.0;
+    if (w >= CH_SHOW_LEN) return 1.0;
+    return pend_smooth01((w - CH_T_ACT2) / (CH_SHOW_LEN - CH_T_ACT2));
 }
 
-// rate in cifre/s di SCENA (il caller lo moltiplica per dt, già lento ai
-// close-up: anche le cifre rallentano insieme al pendolo).
-static inline double rate_of(double th) {
-    return chord_digits_per_rad(th) * pend_rate_at(th);
+// rate in cifre/s di tempo REALE (w = tempo dal via). Il caller lo
+// moltiplica per il dt di SCENA (già lento ai close-up).
+static inline double rate_of(double w) {
+    if (w <= CH_T_HOLD) return CH_RATE_START;
+    double r = CH_RATE_START + (ch_a2 - CH_RATE_START) * chord_psi2(w);
+    if (w > CH_T_ACT2) r += (ch_a3 - ch_a2) * chord_psi3(w);
+    return r;
 }
 
-// C1 che esaurisce `total_digits` cifre esattamente a θ_end. Il piano
-// iniziale porta CH_C0·CH_TH_HOLD cifre, il rodaggio (smoothstep) ne
-// porta la media (CH_C0+C1)/2 · (CH_RAMP_END−CH_TH_HOLD), poi tutto il
-// resto a C1: da qui i due termini sotto (la ∫₀¹smoothstep = 1/2).
-static inline double chord_c1_for(double total_digits) {
-    double ramp = 0.5 * (CH_RAMP_END - CH_TH_HOLD);
-    double num = total_digits - CH_C0 * (CH_TH_HOLD + ramp);
-    double den = ramp + (CH_TH_END - CH_RAMP_END);
-    double c = den > 0.0 ? num / den : 1.483;
-    return c < CH_C1_MIN ? CH_C1_MIN : (c > CH_C1_MAX ? CH_C1_MAX : c);
+// Calibra i due livelli sul file aperto. Il rate è una catena di tre
+// livelli (R0 → A2 → A3) e ogni livello resta attivo fino alla fine del
+// suo atto: per contare le cifre giuste si integrano sia le "baseline"
+// (R0 su [0,120] s, A2 su [120,150] s) sia i ramp (V1, V3).
+//   W0+W2 = ∫₀^120 slow dw    (cifre del piano, che prosegue nel ramp)
+//   V1    = ∫₁₈^120 ψ2·slow dw (rendimento del ramp)
+//   W3s   = ∫₁₂₀^150 slow dw    (baseline A2 che prosegue nel boost)
+//   V3    = ∫₁₂₀^150 ψ3·slow dw (rendimento del boost finale)
+// slow-motion inclusa: gli ultimi 30 s rendono meno cifre perché il 3°
+// close-up rallenta. Il file finisce esattamente a CH_SHOW_LEN secondi.
+static inline void chord_calibrate(double total_digits) {
+    const double dt = 1.0 / 60.0;
+    double th = 0.0, w = 0.0, W0 = 0.0, W2 = 0.0, V1 = 0.0, W3s = 0.0, V3 = 0.0;
+    for (long f = 0; f < (long)(CH_SHOW_LEN * 60.0); ++f) {   // stesso conteggio
+                                                             // frame del loop
+        double slow = pend_slow(th);
+        if (w <= CH_T_HOLD) {
+            W0 += slow * dt;
+        } else if (w <= CH_T_ACT2) {
+            W2 += slow * dt;
+            V1 += chord_psi2(w) * slow * dt;
+        } else {
+            W3s += slow * dt;
+            V3 += chord_psi3(w) * slow * dt;
+        }
+        th += pend_rate_at(th) * slow * dt;      // θ in tempo di scena
+        w += dt;                                 // tempo reale
+    }
+    double base = CH_RATE_START * (W0 + W2);        // cifre del piano + baseline
+    // atto 2:  base + (A2−R0)·V1 = quota2 · file
+    double d2 = (CH_QUOTA2 * total_digits - base) / (V1 > 0.0 ? V1 : 1.0);
+    // atto 3:  (A2−R0)·W3s + (A3−A2)·V3 = (1−quota2) · file
+    double d3 = ((1.0 - CH_QUOTA2) * total_digits - d2 * W3s) / (V3 > 0.0 ? V3 : 1.0);
+    double a2 = CH_RATE_START + d2;
+    double a3 = a2 + d3;
+    ch_a2 = a2 < CH_A_MIN ? CH_A_MIN : (a2 > CH_A_MAX ? CH_A_MAX : a2);
+    ch_a3 = a3 < CH_A_MIN ? CH_A_MIN : (a3 > CH_A_MAX ? CH_A_MAX : a3);
 }
-static inline void chord_set_coefficient(double c1) { chord_c1 = c1; }
 
 // Ricchezza di colore della corda k-esima emessa: le PRIME sono ricche
 // (0.85), le successive sempre più flebili (mai verso il bianco: si
@@ -683,31 +723,29 @@ int main(int argc, char* argv[]) {
     }
 
     // ---- 2) pacing: replica ESATTA del loop principale (dt 1/60, slow globale)
-    //   cifre: dig += rate_of(θ)·dt = C(θ)·R(θ)·dt   (dt di scena, già lento)
-    //   fine: cifre esaurite (l'ultima non genera corda) OPPURE θ a fondo
-    //         della coreografia → da lì la scena resta CONGELATA
-    // tw = tempo reale (quello che l'utente guarda: gli eventi con slow 0.1
-    // durano ~10 s reali benché coprano solo ~3.2 s di scena).
-    double t = 0.0, tw = 0.0, th = 0.0, dig = 0.0;
-    double t8 = -1, t500 = -1, tend = -1, rate500 = -1;
-    double th_end = -1, dig_end = 0.0;
+    //   tempo REALE tw (quello che l'utente cronometra: 150 s) e tempo di
+    //   SCENA ts = ∫slow (il clock del fade delle corde). Le cifle si
+    //   emettono a rate_of(tw) per ogni dt di SCENA → la slow motion dei
+    //   close-up rallenta anche il pannello destro.
+    //   FINE: CH_SHOW_LEN scaduto OPPURE file esaurito → scena CONGELATA.
+    double ts = 0.0, tw = 0.0, th = 0.0, dig = 0.0, dig120 = -1;
+    double t8 = -1, tend = -1, rate_boost = -1;
     double tc[PEND_N_CONTACTS], ev_in[PEND_N_CONTACTS], ev_dur[PEND_N_CONTACTS];
     bool   in_ev[PEND_N_CONTACTS];
     for (int i = 0; i < PEND_N_CONTACTS; ++i) {
         tc[i] = ev_in[i] = ev_dur[i] = -1; in_ev[i] = false;
     }
     const double total = (double)r.decimal_digits();
-    const double theta_max = pend_contact_th(2) + pend_window(2) + 120.0 * PEND_R[3];
-    chord_set_coefficient(chord_c1_for(total));
+    chord_calibrate(total);
     const double rate_start = rate_of(0.0);
-    for (long frame = 0; frame < 60L * 420; ++frame) {
+    for (long frame = 0; frame < 60L * 400; ++frame) {
         double slow = pend_slow(th);
         double dts = (1.0 / 60.0) * slow;       // dt di scena (slow GLOBALE)
         double prev = dig;
-        dig += rate_of(th) * dts;
-        if (t8   < 0 && prev < 8.0   && dig >= 8.0)   t8 = tw;
-        if (t500 < 0 && prev < 500.0 && dig >= 500.0) { t500 = tw; rate500 = rate_of(th); }
-        t  += dts;
+        dig += rate_of(tw) * dts;
+        if (t8 < 0 && prev < 8.0 && dig >= 8.0) t8 = tw;
+        if (dig120 < 0 && tw >= CH_T_ACT2) { dig120 = dig; rate_boost = rate_of(tw); }
+        ts += dts;
         tw += 1.0 / 60.0;                       // tempo reale
         th += pend_rate_at(th) * dts;
         for (int i = 0; i < PEND_N_CONTACTS; ++i) {
@@ -716,40 +754,37 @@ int main(int argc, char* argv[]) {
             if (!in_ev[i] && d < 1.0) { in_ev[i] = true; ev_in[i] = tw; }
             else if (in_ev[i] && d >= 1.0) { ev_dur[i] = tw - ev_in[i]; in_ev[i] = false; }
         }
-        // FINE: file esaurito o coreografia arrivata in fondo → congelamento
-        if (dig >= total - 1.0 || th >= theta_max) {
-            tend = tw; th_end = th; dig_end = dig;
-            break;
-        }
+        if (tw >= CH_SHOW_LEN || dig >= total - 1.0) { tend = tw; break; }
     }
     for (int i = 0; i < PEND_N_CONTACTS; ++i)
         if (in_ev[i]) ev_dur[i] = tw - ev_in[i];
 
-    std::printf("rate: %.2f cifre/s a θ=0 (1 cifra ogni %.1f s), C1=%.3f cifre/rad, "
-                "%.0f cifre/s a 500 cifre, %.0f a fine\n",
-                rate_start, 1.0 / rate_start, chord_c1, rate500, rate_of(th_end));
-    std::printf("pacing: cifra 8 a t=%.1f s, cifra 500 a t=%.1f s, "
-                "%s a t=%.1f s (θ_fine=%.0f rad, %.1f%% del file)\n",
-                t8, t500, total < 1e6 ? "file esaurito" : "fine coreografia",
-                tend, th_end, 100.0 * dig_end / total);
+    std::printf("rate: %.2f cifre/s iniziali (1 ogni %.1f s), A2=%.0f cifre/s a %g s, "
+                "A3=%.0f cifre/s a %g s\n",
+                rate_start, 1.0 / rate_start, ch_a2, CH_T_ACT2, ch_a3, CH_SHOW_LEN);
+    std::printf("pacing: cifra 8 a %.1f s, %.0f cifre a %g s, boost da %.0f cifre/s, "
+                "fine a %.1f s (%.2f%% del file, ultimi 30 s = %.0f cifre)\n",
+                t8, dig120, CH_T_ACT2, rate_boost, tend, 100.0 * dig / total,
+                dig - dig120);
     for (int i = 0; i < PEND_N_CONTACTS; ++i)
         std::printf("evento %d: contatto a t=%.1f s, durata close-up %.1f s\n",
                     i + 1, tc[i], ev_dur[i]);
 
-    // vincoli di progetto (pacing richiesto dall'utente: inizio lento
-    // 1 cifra/2 s, poi accelerazione COERENTE col pendolo e FININE:
-    // la scena si congela quando il file finisce, non gira all'infinito)
+    // vincoli di progetto (richiesta utente: 1 cifra ogni 2 s all'inizio,
+    // boost finale con ~200.000 cifre negli ultimi 30 s, spettacolo di
+    // 150 s esatti che si CONGELA, tre close-up tutti visibili)
     struct { double v, lo, hi; const char* nome; } checks[] = {
         {rate_start, 0.45, 0.55, "rate iniziale (1 cifra ogni 2 s)"},
         {t8,          12,   22, "cifra 8"},
-        {t500,        55,  110, "cifra 500"},
-        {rate500,      4,  500, "rate a 500 cifre (già accelerato)"},
-        {chord_c1,   1.40, 1.55, "C1 (cifre/rad) calibrato sul file"},
-        {tend,       200,  330, "fine animazione (freeze)"},
-        {th_end / CH_TH_END, 0.97, 1.02, "fine sul 3° close-up"},
-        {tc[0],       40,  75, "contatto 1"},
-        {tc[1],      100, 170, "contatto 2"},
-        {tc[2],      180, 330, "contatto 3"},
+        {ch_a2,      800, 2500, "rate a 120 s (ramp)"},
+        {ch_a3,     4000, 26000, "rate nominale a 150 s (boost)"},
+        {dig120 / total, 0.30, 0.42, "cifre nei primi 120 s"},
+        {(dig - dig120) / total, 0.58, 0.70, "cifre negli ultimi 30 s"},
+        {tend,       148,  151, "durata spettacolo (freeze)"},
+        {dig / total, 0.995, 1.001, "file interamente consumato"},
+        {tc[0],       46,  60, "contatto 1"},
+        {tc[1],      112, 128, "contatto 2"},
+        {tc[2],      138, 150, "contatto 3"},
         {ev_dur[0],    5,  20, "durata evento 1"},
         {ev_dur[1],    5,  20, "durata evento 2"},
         {ev_dur[2],    5,  20, "durata evento 3"},

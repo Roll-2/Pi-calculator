@@ -26,13 +26,19 @@
 // convergenti "notevoli" sono quasi-contatti visibili a vista d'occhio.
 //
 // COLORE: la curva cambia tinta SOLO quando supera un contatto (indice
-// 0..3 → 4 tinte dalla ruota HSL hue = 282° + 47°·n): il cambio colore
-// cade esattamente sull'istante del quasi-contatto, non a ogni 2π.
+// 0..3 → 4 tinte scelte a mano, ordine ROSSO → AZZURRO → ARANCIONE →
+// VIOLA): il cambio colore cade esattamente sull'istante del quasi-
+// contatto, non a ogni 2π.
 //
 // COREOGRAFIA: rate per segmento R[4] (rad per secondo di scena), finestra
 // evento W_i = 1.61·R_i (durata ~10 s con slow 0.1), ponti di rate lisci
 // dopo ogni evento. Lo slow moltiplica il dt GLOBALE (vedi Pi-visual.cpp):
 // pendolo E chord rallentano insieme a ogni close-up.
+// Lo spettacolo dura 150 s reali (CH_SHOW_LEN in chord.h): i due primi
+// contatti restano dove sono (52 s e 120 s) e lo SPRINT finale è
+// accelerato a 28.000 rad/s, così il 3° quasi-contatto (66204π) cade a
+// 145 s e il suo close-up finisce a 149,9 s: lo spettacolo si chiude sul
+// climax.
 //
 // PASSO ADATTIVO: base 0.008 rad; raffinato vicino ai contatti
 // (sagitta ≤ 1 px al massimo zoom in cui il punto è visibile) + campioni
@@ -99,10 +105,19 @@ static inline int pend_contact_index(double th) {
     return n;
 }
 
-// Tinta dell'indice contatto n (0 = iniziale): ruota HSL passo 47°.
+// Tinta dell'indice contatto n (0 = iniziale): 4 tinte scelte a mano.
+//   0 nascita → ROSSO    1 (14π) → AZZURRO
+//   2 (226π) → ARANCIONE 3 (66204π) → VIOLA
+static const double PEND_TINT_H[4] = {  2.0, 200.0,  28.0, 282.0 };
+static const double PEND_TINT_S[4] = {0.80,  0.70,  0.85,  0.55 };
+static const double PEND_TINT_L[4] = {0.58,  0.66,  0.60,  0.62 };
+
+// Tinta dell'indice contatto n (0 = iniziale, 3 = dopo il 3° contatto).
 static inline void pendulum_contact_color(int n, float out[4]) {
-    double h = std::fmod(282.0 + 47.0 * (double)n, 360.0) / 60.0;
-    const double s = 0.78, l = 0.62;
+    if (n < 0) n = 0;
+    if (n > 3) n = 3;
+    double h = PEND_TINT_H[n] / 60.0;
+    const double s = PEND_TINT_S[n], l = PEND_TINT_L[n];
     double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
     double x = c * (1.0 - std::fabs(std::fmod(h, 2.0) - 1.0));
     double r = 0, g = 0, b = 0;
@@ -121,15 +136,19 @@ static inline void pendulum_contact_color(int n, float out[4]) {
 
 // ---------------- coreografia (funzioni di θ) ----------------
 // Rate per segmento (rad per secondo di scena, senza slow):
-//   0 → contatto 1 : 0.9   (piano: i primi digit si vedono crescere)
+//   0 → contatto 1 : 0.9    (piano: i primi digit si vedono crescere)
 //   contatto 1 → 2 : 14
-//   contatto 2 → 3 : 2400  (slog: la curva riempie il disco in ~80 s)
+//   contatto 2 → 3 : 28000  (slog finale: la curva riempie il disco in
+//                              ~20 s, così il 3° contatto arriva a 145 s
+//                              e lo spettacolo finisce a 150 s)
 //   dopo contatto 3 : 40    (rielaborazione morbida)
-static const double PEND_R[4] = {0.9, 14.0, 2400.0, 40.0};
+static const double PEND_R[4] = {0.9, 14.0, 28000.0, 40.0};
 // Finestra evento: W = 1.61·R  →  durata evento ≈ 6.21·W/R ≈ 10 s
 static const double PEND_W_K   = 1.61;
 static const double PEND_SLOW_R = 0.10;            // slow minimo
 // Ponti di rate (smoothstep) dopo l'evento i: [θ_i+W_i, +PEND_BRIDGE[i]]
+// Dopo il 2° contatto il ponte è di 6.000 rad: il rate sale da 14 a
+// 28.000 rad/s in ~7 s (il passaggio graduale all'ultimo atto).
 static const double PEND_BRIDGE[PEND_N_CONTACTS] = {60.0, 6000.0, 60.0};
 // Separazione visibile al contatto: frazione di mezza-altezza viewport
 static const double PEND_ZOOM_FRAC = 0.30;         // zoom_i = 0.72/miss_i

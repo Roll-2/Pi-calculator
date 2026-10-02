@@ -135,12 +135,13 @@ split -b 1M pi100m.txt pi_part_ # split into 1 MB chunks
 ## Pi-visual — the π visualizer
 
 `Pi-visual.cpp` (+ headers in `visual/`) is an SDL2 + OpenGL 3.3 core window
-split into two viewports, driven by one clock `t` and **one shared
-choreography in θ**: the digit rate is measured in *digits per radian of θ*
-(`rate(θ) = C(θ)·R(θ)`, with `R(θ)` the pendulum's own angular rate), so the
-two panels cannot disagree — they slow down and speed up together. A global
-slow-motion kicks in at every pendulum close-up, and when the digits run out
-the whole scene **freezes** instead of spinning forever: ~4 minutes.
+split into two viewports, driven by **one choreography with two clocks**: a
+real-time clock `t` (150 s exactly, what you watch) and a scene clock
+`∫slow` (used by the chord fade). The digit rate is a three-act curve on
+real time, calibrated on the open digits file, so the file is always
+consumed exactly at the end. A global slow-motion kicks in at every pendulum
+close-up and slows both panels; at 150 s the whole scene **freezes** instead
+of spinning forever.
 
 - **left — compound pendulum** `Z(θ) = e^(iθ) + e^(iπθ)`, with π hard-coded
   to 17 decimals. The camera works with **events** at the three near-closures
@@ -150,8 +151,12 @@ the whole scene **freezes** instead of spinning forever: ~4 minutes.
   **slows down** (global slow-motion shared with the chord panel), so the
   close-up shows two clearly separated near-vertical lines — the returning
   curve vs the birth branch, ~220 px apart; they never touch. The curve
-  changes colour **only at a near-contact** (four HSL tints), not per period,
-  so the eye can count the close calls.
+  changes colour **only at a near-contact**, in the order **red → light blue
+  → orange → violet** (birth, 14π, 226π, 66204π), not per period, so the eye
+  can count the close calls. The first two contacts keep their original
+  timing (52 s and 120 s); the final sprint is accelerated to 28,000 rad/s so
+  that the third contact lands at 145 s and its close-up ends at 149.9 s —
+  the show closes on its own climax.
 - **right — chord diagram** of the digits of π read from the digits file
   (default `pi_314159.txt`) via `mmap` (never copied into memory): 10 colored sectors (0–9) with large
   digit labels around the ring, one **curved** chord (quadratic Bézier) per
@@ -162,17 +167,17 @@ the whole scene **freezes** instead of spinning forever: ~4 minutes.
   toward white) and each new chord is fainter than the previous one (alpha
   decays with the chord index, with a floor), so the web stays colourful
   while only the newest chords stand out. Rate: **0.5 digits/s** (one digit
-  every 2 s) while `3, 1415…` grows slowly for the first ~18 s, then the
-  coefficient `C(θ)` ramps up and the digit rate simply *follows the
-  pendulum's acceleration* (≈21 digits/s at 500 digits, ≈3.5·10³ digits/s
-  during the final sprint). `C₁` is calibrated on the open file, so that all
-  of its digits are consumed at the **end of the third close-up** (t ≈ 249 s;
-  314,158 of 314,159 digits with the default file). From that instant
-  `dt = 0`: θ stops, the rate stops growing, the scene clock stops — which
+  every 2 s) while `3, 1415…` grows slowly for the first 18 s, then a smooth
+  ramp to ≈2,4·10³ digits/s at 120 s (36% of the file), then a **final boost**
+  in the last 30 s (≈2·10⁴ digits/s at the end) which delivers ≈201,000 digits
+  — the rest of the file — while the pendulum runs its last sprint. The two
+  amplitudes are **calibrated on the open file and on the real choreography**
+  (slow-motion included), so the file is finished exactly at 150 s. From that
+  instant `dt = 0`: θ stops, the rate stops growing, both clocks stop — which
   also freezes the shader fade, so the final carpet stays on screen with its
   colours (no fading to nothing, no white-out) and the HUD prints
-  `COMPLETATO — R per riavviare`. A digits file longer than the choreography
-  saturates `C₁` and the scene still stops at θ_max.
+  `COMPLETATO — R per riavviare`. The digit legend sits in the **bottom-right
+  corner**, next to the panel it explains.
 
 ### Build & run
 
@@ -370,13 +375,13 @@ split -b 1M pi100m.txt pi_part_ # dividi in blocchi da 1 MB
 ## Pi-visual — il visualizzatore di π
 
 `Pi-visual.cpp` (+ header in `visual/`) è una finestra SDL2 + OpenGL 3.3
-core divisa in due viewport, guidati da un solo clock `t` e da **una sola
-coreografia in θ**: il rate delle cifre è in *cifre per radiante di θ*
-(`rate(θ) = C(θ)·R(θ)`, con `R(θ)` il rate angolare del pendolo), quindi i
-due pannelli non possono contraddirsi — rallentano e accelerano insieme.
-Una slow motion globale scatta a ogni close-up del pendolo e, quando le
-cifre finiscono, tutta la scena si **congela** invece di girare all'infinito:
-~4 minuti.
+core divisa in due viewport, guidati da **una sola coreografia con due
+clock**: il tempo reale `t` (150 s esatti, quello che si guarda) e il tempo
+di scena `∫slow` (quello del fade delle corde). Il rate delle cifre è una
+curva a tre atti sul tempo reale, calibrata sul file aperto, così il file
+finisce sempre esattamente alla fine. Una slow motion globale scatta a ogni
+close-up del pendolo e rallenta entrambi i pannelli; a 150 s tutta la scena
+si **congela** invece di girare all'infinito: 2 minuti e 30 secondi.
 
 - **sinistro — pendolo composto** `Z(θ) = e^(iθ) + e^(iπθ)`, con π hardcoded
   a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
@@ -387,8 +392,12 @@ cifre finiscono, tutta la scena si **congela** invece di girare all'infinito:
   motion globale**, condivisa col chord): il close-up mostra due linee
   quasi-verticali ben separate — la curva di ritorno e il ramo di nascita,
   ~220 px di distanza — che non si toccano mai. La curva cambia colore
-  **solo al quasi-contatto** (quattro tinte HSL), non a ogni periodo, così
-  l'occhio conta i passaggi ravvicinati.
+  **solo al quasi-contatto**, nell'ordine **rosso → azzurro → arancione →
+  viola** (nascita, 14π, 226π, 66204π), non a ogni periodo, così l'occhio
+  conta i passaggi ravvicinati. I due primi contatti restano dove sono
+  (52 s e 120 s); lo sprint finale è accelerato a 28.000 rad/s così il 3°
+  contatto cade a 145 s e il suo close-up finisce a 149,9 s: lo spettacolo si
+  chiude sul suo climax.
 - **destro — chord diagram** delle cifre di π lette dal file di cifre
   (default `pi_314159.txt`) via `mmap` (mai copiate in memoria): 10 settori colorati (0–9) con le cifre
   grandi attorno all'anello, una corda **curva** (Bézier quadratica) per
@@ -399,17 +408,18 @@ cifre finiscono, tutta la scena si **congela** invece di girare all'infinito:
   colori non schizzano mai verso il bianco) e ogni corda nuova è più
   flebile della precedente (alpha decrescente con indice, con floor), così
   la ragnatela resta colorata e solo le ultime spiccano. Rate: **0,5 cifre/s**
-  (1 cifra ogni 2 s) mentre `3, 1415…` cresce lentamente nei primi ~18 s, poi
-  il coefficiente `C(θ)` sale e il rate delle cifre *segue l'accelerazione
-  del pendolo* (~21 cifre/s a 500 cifre, ~3,5·10³ cifre/s nello sprint
-  finale). `C₁` è calibrato sul file aperto: tutte le sue cifre vengono
-  consumate alla **fine del terzo close-up** (t ≈ 249 s; 314.158 cifre su
-  314.159 con il file di default). Da quel momento `dt = 0`: θ si ferma, il
-  rate smette di crescere, il clock di scena si ferma — e con lui si ferma
+  (1 cifra ogni 2 s) mentre `3, 1415…` cresce lentamente nei primi 18 s, poi
+  una rampa smoothstep fino a ~2,4·10³ cifre/s a 120 s (36% del file) e infine
+  un **boost finale** negli ultimi 30 s (~2·10⁴ cifre/s alla fine) che
+  sforna ~201.000 cifre — tutto il resto del file — mentre il pendolo corre
+  il suo sprint conclusivo. Le due ampiezze sono **calibrate sul file aperto
+  e sulla coreografia reale** (slow motion compresa), così il file finisce
+  esattamente a 150 s. Da quel momento `dt = 0`: θ si ferma, il rate smette
+  di crescere, entrambi i clock si fermano — e con quello di scena si ferma
   anche il fade calcolato nello shader, così il tappeto finale resta a
   schermo con i suoi colori (niente sparizioni, niente schiaramento) e
-  l'HUD stampa `COMPLETATO — R per riavviare`. Un file più lungo della
-  coreografia satura `C₁` e la scena si ferma comunque a θ_max.
+  l'HUD stampa `COMPLETATO — R per riavviare`. La legenda delle 10 cifre sta
+  in basso a **destra**, accanto al pannello che spiega.
 
 ### Compilazione ed esecuzione
 
