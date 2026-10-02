@@ -315,10 +315,6 @@ int main(int argc, char* argv[]) {
     // ampiezze (A2 a 120 s, A3 a 150 s) sono risolte in modo che il file
     // finisca ESATTAMENTE a CH_SHOW_LEN = 150 s reali.
     chord_calibrate(total_digits);
-    std::printf("spettacolo: %.0f s | rate cifre: %.2f cifre/s iniziali, "
-                "%.0f a %g s, %.0f a %g s | %lld cifre\n",
-                CH_SHOW_LEN, CH_RATE_START, ch_a2, CH_T_ACT2, ch_a3, CH_SHOW_LEN,
-                (long long)total_digits);
     PendulumStream pend_stream;
     pend_stream.init_gl(THETA_MAX);
     PendulumBirth pend_birth;              // ramo nascita (2,0): sempre in quadro
@@ -540,11 +536,7 @@ int main(int argc, char* argv[]) {
         // completa del file è la ragnatela statica, che a qui contiene
         // tutte le transizioni.
         if (just_finished) {
-            finished = true;
-            std::printf("FINE ANIMAZIONE a %.1f s reali: %lld/%lld cifre, θ=%.0f rad — "
-                        "scena congelata (R per riavviare)\n",
-                        t, (long long)stream.base_index, (long long)total_digits, theta_cur);
-            std::fflush(stdout);
+            finished = true;   // silenzio: lo stato è tutto nell'HUD
         }
 
         // ---- verifica geometrica automatica (una tantum, a t>20 s) ----
