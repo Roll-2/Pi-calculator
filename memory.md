@@ -129,3 +129,11 @@ Richieste: (1) colore che cambia al passaggio ravvicinato e non a ogni periodo; 
 ## Prossimi passi (quarta passata)
 
 - Controllo visivo dell'utente sui tre close-up e sulla ragnatela; se la separazione delle due linee o i tempi non convince, si ritocca pend_shot_th/zoom_i/coreografia.
+
+## Riassetto repository (richiesta utente, dopo chiusura grafica)
+
+- **Rimossi** i sorgenti dei due programmi storici `pi300k.cpp` e `pi100m.cpp` (`git rm`) e i relativi eseguibili `pi300k`/`pi100m`: ora che esiste `pi_calc.cpp` a N variabile non servono più. **Conservati** i file di cifre: `pi300k.txt` (300.016 byte, tracciato) e `pi100m.txt` (100.000.002 byte, git-ignorato) restano su disco.
+- `.gitignore`: rimossa la sezione "Eseguibili" con i pattern `pi300k`/`pi100m` morti; invariate le regole sui txt (`pi100m.txt` resta ignorato, `pi_*.txt` idem) e `!Makefile`.
+- **README riscritto** (EN+IT): rimosse le sezioni `pi300k.cpp` e `pi100m.cpp` (tabella caratteristiche, prestazioni, limiti, record); "The algorithm" e "Viewing the digit files" ricollocate come sezioni top-level valide per `pi_calc`; intro, sezione `pi_calc`, bullet del chord (file di default), project layout e note aggiornati; intro del visualizzatore IT allineata all'EN (slow globale, ~4 minuti).
+- Commenti allineati: testa di `pi_calc.cpp` (architettura da record senza riferimenti ai file rimossi), `pi_reader.h`; default del self-test CHORD_TEST → `pi_314159.txt`.
+- Verifiche post-rimozione: grep senza riferimenti orfani, `make clean && make` pulito, chord_test e camera_test OK.

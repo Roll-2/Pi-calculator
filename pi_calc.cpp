@@ -1,12 +1,13 @@
 // ============================================================
-// pi_calc.cpp — calcolatore di π unificato (successore di pi300k e pi100m)
+// pi_calc.cpp — calcolatore di π unificato (sostituisce i vecchi pi300k e
+// pi100m, rimossi dal repository)
 //
-// Basato integralmente su pi100m.cpp (la versione corretta e scalabile):
+// Architettura (le 5 tecniche "da record" di gmp-chudnovsky.c):
 // Chudnovsky con binary splitting su interi esatti mpz_class, sqrt(10005)
-// con Newton a precisione dinamica, conversione decimale con mpz_get_str.
-// Vedi i commenti di pi100m.cpp per le 5 tecniche "da record" e la teoria.
-// (pi300k.cpp resta come riferimento storico; il suo difetto era l'uso di
-// mpfr_float nell'albero e l'overflow a ~62M cifre del caso base a 64 bit.)
+// con Newton a precisione dinamica, conversione decimale con mpz_get_str,
+// parallelismo su chunk contigui di termini.
+// (Il vecchio pi300k usava mpfr_float nell'albero ed andava in overflow a
+// ~62M cifre col caso base a 64 bit: da qui la scelta dell'albero mpz.)
 //
 // CLI:
 //   ./pi_calc [-N cifre] [-t thread] [-o file] [--no-verify] [-h]

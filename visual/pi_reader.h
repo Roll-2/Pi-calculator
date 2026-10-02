@@ -9,7 +9,7 @@
 // così 100 MB di cifre non pesano sul heap.
 //
 // All'open() verifica le prime 100 cifre contro il prefisso noto
-// (prime 100 cifre del prefisso di pi100m.cpp): se non corrispondono
+// (prefisso di riferimento della serie): se non corrispondono
 // ritorna errore — chi chiama deve uscire.
 //
 // Self-test temporaneo (non è un binario ufficiale):
@@ -64,7 +64,7 @@ struct PiReader {
         data = (const char*)mapped;
 
         // Verifica del prefisso: prime 100 cifre (il prefisso noto di
-        // pi100m.cpp è di 1000 cifre; qui bastano le prime 100 per essere
+        // riferimento è di 1000 cifre; qui bastano le prime 100 per essere
         // sicuri di aver aperto il file giusto).
         static const char KNOWN_100[] =
             "3.1415926535897932384626433832795028841971693993751058209749445923078"

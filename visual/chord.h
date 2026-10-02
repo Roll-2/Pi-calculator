@@ -572,7 +572,7 @@ struct ChordStream {
 // Self-test: bilanciamento + costruzione mesh + controlli di forma
 // + pacing cifre (rate_of) + coreografia pendolo (contatti/tempi/zoom).
 int main(int argc, char* argv[]) {
-    const char* path = (argc > 1) ? argv[1] : "pi100m.txt";
+    const char* path = (argc > 1) ? argv[1] : "pi_314159.txt";
     PiReader r;
     if (!r.open(path)) return 1;
     ChordData cd;

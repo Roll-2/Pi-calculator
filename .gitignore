@@ -15,12 +15,6 @@
 *.app
 
 # -------------------------------
-# Eseguibili
-# -----------------------------
-pi300k
-pi100m
-
-# -------------------------------
 # Librerie statiche e dinamiche
 # -------------------------------
 *.a
@@ -191,8 +185,9 @@ conanbuild.lock
 pi_calc
 Pi-visual
 
-# Output di pi_calc (pi_<N>.txt); pi300k.txt e pi100m.txt non matchano
-# (nessun underscore) e restano tracciati/gestiti come finora
+# Output di pi_calc (pi_<N>.txt); pi300k.txt e pi100m.txt (file di cifre
+# conservati, i sorgenti che li generavano sono stati rimossi) non matchano
+# e restano gestiti come finora (pi100m.txt ignorato, pi300k.txt tracciato)
 pi_*.txt
 
 # Oggetti del visualizzatore
