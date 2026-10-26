@@ -61,7 +61,7 @@ clang++ -std=c++17 -O2 pi_calc.cpp -o pi_calc \
 
 The program never risks heavy swapping or OOM. Before any large allocation:
 
-- **peak estimate** = `N × 53` bytes — empirical formula measured on this
+- **peak estimate** = `N × 53` bytes — empirical formula measured on M4 pro
   machine with the 20% margin included (10M digits → 0.53 GB estimated,
   100M → 5.3 GB estimated vs 4.4 GB measured);
 - **cap** = `min(20 GB, system RAM − 4 GB)` — system RAM read from
@@ -83,8 +83,6 @@ exits with an error and writes no file.
 
 `pi_calc.cpp` computes π with the classic Ramanujan-derived series used for
 record-breaking computations:
-
-The classic Ramanujan-derived series used for record-breaking π computations:
 
 ```
 π = 426880·√10005 / S ,   S = Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k))
@@ -138,7 +136,7 @@ split -b 1M pi100m.txt pi_part_ # split into 1 MB chunks
 split into two viewports, driven by **one choreography with two clocks**: a
 real-time clock `t` (150 s exactly, what you watch) and a scene clock
 `∫slow` (used by the chord fade). The digit rate is a three-act curve on
-real time, calibrated on the open digits file, so the file is always
+real time, calibrated on the open digits file, so it's always
 consumed exactly at the end. A global slow-motion kicks in at every pendulum
 close-up and slows both panels; at 150 s the whole scene **freezes** instead
 of spinning forever.
@@ -147,16 +145,13 @@ of spinning forever.
   to 17 decimals. The camera works with **events** at the three near-closures
   of π — 14π, 226π and 66204π, where the curve grazes its birth point (2,0)
   at distance `miss` = δ*² ≈ 1.8e-4 / 2.1e-9 / 8.4e-10: at each event the
-  view zooms in logarithmically (zoom = 0.72/miss, up to ~8.6e8×) and time
-  **slows down** (global slow-motion shared with the chord panel), so the
-  close-up shows two clearly separated near-vertical lines — the returning
-  curve vs the birth branch, ~220 px apart; they never touch. The curve
-  changes colour **only at a near-contact**, in the order **red → light blue
-  → orange → violet** (birth, 14π, 226π, 66204π), not per period, so the eye
-  can count the close calls. The first two contacts keep their original
-  timing (52 s and 120 s); the final sprint is accelerated to 28,000 rad/s so
-  that the third contact lands at 145 s and its close-up ends at 149.9 s —
-  the show closes on its own climax.
+  view zooms in logarithmically (zoom = 0.72/miss, up to 220 px apart;
+  they never touch. The curve changes colour **only at a near-contact**,
+  in the order **red → light blue → orange → violet** (birth, 14π, 226π, 66204π),
+  not per period, so the eye can count the close calls. The first two contacts
+  keep their original timing (52 s and 120 s); the final sprint is accelerated
+  to 28,000 rad/s so that the third contact lands at 145 s and its close-up
+  ends at 149.9 s — the show closes on its own climax.
 - **right — chord diagram** of the digits of π read from the digits file
   (default `pi_314159.txt`) via `mmap` (never copied into memory): 10 colored sectors (0–9) with large
   digit labels around the ring, one **curved** chord (quadratic Bézier) per
@@ -238,7 +233,8 @@ pi300k.txt        300,014 digits kept as data (300,016 bytes)
 
 ## License
 
-No license file is present in the repository.
+No license file is present in the repository, so for the moment All Right Reserves apply.
+You can directly ask me for forks and other use cases.
 
 ---
 
@@ -262,9 +258,9 @@ git-ignorato). I sorgenti `pi300k.cpp` e `pi100m.cpp` sono stati rimossi —
 
 ## `pi_calc.cpp` — il calcolatore unificato
 
-`pi_calc.cpp` è l'unico calcolatore: sostituisce i due programmi
+`pi_calc.cpp` è il calcolatore principale: sostituisce i due programmi
 precedenti (`pi300k.cpp` e `pi100m.cpp`, rimossi dal repository) e
-mantiene l'architettura più solida dei due (binary splitting esatto su
+mantiene l'architettura solida dei due (binary splitting esatto su
 `mpz_class`, sqrt con Newton a precisione dinamica, conversione veloce con
 `mpz_get_str`).
 
@@ -272,7 +268,7 @@ mantiene l'architettura più solida dei due (binary splitting esatto su
 |---|---|
 | Default | 314.159 cifre, 4 thread |
 | Output | `pi_<N>.txt` (`"3."` + N cifre, nessun newline finale) |
-| Verifica | prime 1.000 cifre contro un prefisso noto (attiva di default) |
+| Verifica | prime 1.000 cifre contro il valore noto (attiva di default) |
 | Controllo RAM | barriera dura: nessun calcolo oltre il cap, nessun flag di override |
 
 ### Uso
@@ -301,14 +297,14 @@ clang++ -std=c++17 -O2 pi_calc.cpp -o pi_calc \
 Il programma non rischia mai swap pesante né OOM. Prima di ogni allocazione
 grande:
 
-- **stima picco** = `N × 53` byte — formula empirica misurata su questa
-  macchina con margine del 20% incluso (10M cifre → 0,53 GB stimati,
+- **stima picco** = `N × 53` byte — formula empirica misurata su M4 pro
+  con margine del 20% incluso (10M cifre → 0,53 GB stimati,
   100M → 5,3 GB stimati contro 4,4 GB misurati);
 - **cap** = `min(20 GB, RAM sistema − 4 GB)` — RAM letta da
   `sysctl hw.memsize`;
 - stima e cap sono stampati all'avvio (`stima picco: X,X GB /
   disponibile: Y,Y GB`);
-- se la stima supera il cap il programma esce con un errore chiaro (cifre
+- se la stima supera il cap, il programma esce con un errore chiaro (cifre
   richieste, picco stimato, cap effettivo, RAM rilevata, suggerimento di
   ridurre `-N`) **senza calcolare nulla**. Non esiste **nessun** flag
   `--force` / `--max-ram`: la barriera è dura per scelta.
@@ -323,8 +319,6 @@ programma esce con errore e non scrive alcun file.
 
 `pi_calc.cpp` calcola π con la classica serie derivata da Ramanujan usata
 nei record di calcolo:
-
-La classica serie derivata da Ramanujan usata per i record di calcolo di π:
 
 ```
 π = 426880·√10005 / S ,   S = Σ (-1)ᵏ (6k)! (13591409 + 545140134·k) / ((3k)! (k!)³ 640320^(3k))
@@ -347,10 +341,10 @@ costruisce una tripla `(P, Q, R)`:
   - `R = R_sx · Q_dx + P_sx · R_dx`
 
 La profondità della ricorsione è solo `log2(N) ≈ 15`, e il lavoro totale è
-`O(N · M(n))` invece di `O(N² · M(n))` della somma ingenua. Infine la somma
+`O(N · M(n))` invece di `O(N² · M(n))` della somma "ingenua". Infine la somma
 totale è `S = A + R/Q` e `π = 426880·√10005 / S` (`A = 13591409`).
 
-L'implementazione segue le tecniche da record dell'implementazione di
+Il calcolatore segue le tecniche da record dell'implementazione di
 riferimento GMP `gmp-chudnovsky.c`: l'intero albero `P, Q, R` gira su interi
 GMP (`mpz_class`) con MPFR usato una sola volta per la divisione finale,
 `sqrt(10005)` con Newton a precisione dinamica, output decimale con la
@@ -375,11 +369,11 @@ split -b 1M pi100m.txt pi_part_ # dividi in blocchi da 1 MB
 ## Pi-visual — il visualizzatore di π
 
 `Pi-visual.cpp` (+ header in `visual/`) è una finestra SDL2 + OpenGL 3.3
-core divisa in due viewport, guidati da **una sola coreografia con due
-clock**: il tempo reale `t` (150 s esatti, quello che si guarda) e il tempo
-di scena `∫slow` (quello del fade delle corde). Il rate delle cifre è una
-curva a tre atti sul tempo reale, calibrata sul file aperto, così il file
-finisce sempre esattamente alla fine. Una slow motion globale scatta a ogni
+core divisa in due viewport, con logica di **una sola coreografia con due
+clock**: il tempo reale `t` (150 s esatti) e il tempo di scena `∫slow`
+(quello del fade delle corde). Il rate delle cifre è una curva a tre atti 
+sul tempo reale, calibrata sul file aperto, così il file arriva a conclusione
+esattamente alla fine dell'animazione. Uno slow motion globale scatta a ogni
 close-up del pendolo e rallenta entrambi i pannelli; a 150 s tutta la scena
 si **congela** invece di girare all'infinito: 2 minuti e 30 secondi.
 
@@ -387,17 +381,14 @@ si **congela** invece di girare all'infinito: 2 minuti e 30 secondi.
   a 17 decimali. La curva cresce al consumo delle cifre; una coreografia di
   camera scritta a mano lavora a **eventi**: alle tre quasi-chiusure di π —
   14π, 226π e 66204π, dove la curva sfiora il suo punto di nascita (2,0) a
-  distanza `miss` = δ*² ≈ 1,8e-4 / 2,1e-9 / 8,4e-10 — la vista zooma in modo
-  logaritmico (zoom = 0,72/miss, fino a ~8,6e8×) e il tempo rallenta (**slow
-  motion globale**, condivisa col chord): il close-up mostra due linee
-  quasi-verticali ben separate — la curva di ritorno e il ramo di nascita,
-  ~220 px di distanza — che non si toccano mai. La curva cambia colore
-  **solo al quasi-contatto**, nell'ordine **rosso → azzurro → arancione →
-  viola** (nascita, 14π, 226π, 66204π), non a ogni periodo, così l'occhio
-  conta i passaggi ravvicinati. I due primi contatti restano dove sono
-  (52 s e 120 s); lo sprint finale è accelerato a 28.000 rad/s così il 3°
-  contatto cade a 145 s e il suo close-up finisce a 149,9 s: lo spettacolo si
-  chiude sul suo climax.
+  distanza `miss` = δ*² ≈ 1,8e-4 / 2,1e-9 / 8,4e-10 — la vista zoomma in modo
+  logaritmico (zoom = 0,72/miss, fino a ~220 px di distanza, senza riincontrarsi.
+  La curva cambia colore **solo al quasi-contatto**:
+  nell'ordine **rosso → azzurro → arancione → viola** (nascita, 14π, 226π, 66204π),
+  non a ogni periodo, così l'occhio conta i passaggi ravvicinati.
+  I due primi contatti restano dove sono (52 s e 120 s); lo sprint finale è
+  accelerato a 28.000 rad/s così il 3° contatto cade a 145 s e il suo close-up
+  finisce a 149,9 s: lo spettacolo si chiude sulla sua climax.
 - **destro — chord diagram** delle cifre di π lette dal file di cifre
   (default `pi_314159.txt`) via `mmap` (mai copiate in memoria): 10 settori colorati (0–9) con le cifre
   grandi attorno all'anello, una corda **curva** (Bézier quadratica) per
@@ -410,12 +401,12 @@ si **congela** invece di girare all'infinito: 2 minuti e 30 secondi.
   la ragnatela resta colorata e solo le ultime spiccano. Rate: **0,5 cifre/s**
   (1 cifra ogni 2 s) mentre `3, 1415…` cresce lentamente nei primi 18 s, poi
   una rampa smoothstep fino a ~2,4·10³ cifre/s a 120 s (36% del file) e infine
-  un **boost finale** negli ultimi 30 s (~2·10⁴ cifre/s alla fine) che
-  sforna ~201.000 cifre — tutto il resto del file — mentre il pendolo corre
-  il suo sprint conclusivo. Le due ampiezze sono **calibrate sul file aperto
-  e sulla coreografia reale** (slow motion compresa), così il file finisce
-  esattamente a 150 s. Da quel momento `dt = 0`: θ si ferma, il rate smette
-  di crescere, entrambi i clock si fermano — e con quello di scena si ferma
+  un **boost finale** negli ultimi 30 s ~201.000 cifre — tutto il resto del file
+  — mentre il pendolo corre il suo sprint conclusivo.
+  Le due ampiezze sono **calibrate sul file aperto e sulla coreografia reale**
+  (slow motion compresa), così il file finisce esattamente a 150 s.
+  Da quel momento `dt = 0`: θ si ferma, il rate smette di crescere,
+  entrambi i clock si fermano — e con quello di scena si ferma
   anche il fade calcolato nello shader, così il tappeto finale resta a
   schermo con i suoi colori (niente sparizioni, niente schiaramento) e
   l'HUD stampa `COMPLETATO — R per riavviare`. La legenda delle 10 cifre sta
@@ -481,4 +472,8 @@ pi300k.txt        300.014 cifre conservate come dati (300.016 byte)
 
 ## Licenza
 
-Nel repository non è presente alcun file di licenza.
+Nel repository non è presente alcun file di licenza. Scrivere direttamente a me per fork o pull request.
+
+## AI 
+
+Modelli AI sono stati usati nella produzione di questo programma.
